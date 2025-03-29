@@ -14,7 +14,9 @@ install make, cmake, OpenGLES2, etc.
 
 This will try to copy ANGLE's libGLESv2.dylib out of your Google Chrome install.
 
-If you don't have one, you should clone and build ANGLE (TODO: automate this as part of the build script)
+More details, scripts, and examples [here](https://github.com/erik-larsen/gles-for-mac).
+
+If you don't have one, you should clone and build ANGLE (TODO: automate this as part of the build script; there are example commands in the link above)
 
 ```
 ./bs/macos_install.sh
