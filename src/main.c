@@ -1,42 +1,125 @@
-// vim: sw=2 ts=2 expandtab smartindent ft=javascript
+// vim: sw=2 ts=2 expandtab smartindent
+
+#include <stdlib.h>
 
 #include <SDL3/SDL.h>
+#define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL_main.h>
 #define SDL_USE_BUILTIN_OPENGL_DEFINITIONS
 #include <SDL3/SDL_opengles2.h>
 
-int main(int argc, char** argv) {
-  SDL_SetHint(SDL_HINT_APP_NAME, "jeu desprit");
+static struct {
+  struct {
+    SDL_Window    *window;
+    SDL_GLContext  gl_ctx;
+  } sdl;
 
-  if (!SDL_Init(SDL_INIT_VIDEO)) {
-    SDL_Log("SDL init failed: %s\n", SDL_GetError());
-    return 1;
-  }
+  size_t window_size_x, window_size_y;
+
+  struct {
+    GLuint geo_shader;
+    GLuint tex;
+
+    /* resources inside here need to be recreated
+     * when the application window is resized. */
+    struct {
+      /* postprocessing framebuffer (anti-aliasing and other fx) */
+      GLuint pp_tex, pp_fb;
+    } screen;
+  } gl;
+} jeux = {
+  .window_size_x = 640,
+  .window_size_y = 480
+};
+
+static void gl_init(void);
+SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
+
+  /* sdl init */
+  {
+    SDL_SetHint(SDL_HINT_APP_NAME, "jeu desprit");
+
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+      SDL_Log("SDL init failed: %s\n", SDL_GetError());
+      return 1;
+    }
 
 #ifdef _WIN32
-  SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, "1");
+    SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, "1");
 #endif
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
 
-  size_t window_size_x = 640;
-  size_t window_size_y = 480;
-  SDL_Window *sdl_window = SDL_CreateWindow(
-    "jeu desprit",
-    window_size_x,
-    window_size_y,
-    SDL_WINDOW_OPENGL
-  );
-  if (sdl_window == NULL) {
-    SDL_Log("Window init failed: %s\n", SDL_GetError());
-    return 1;
+    jeux.sdl.window = SDL_CreateWindow(
+      "jeu desprit",
+      jeux.window_size_x,
+      jeux.window_size_y,
+      SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE
+    );
+    if (jeux.sdl.window == NULL) {
+      SDL_Log("Window init failed: %s\n", SDL_GetError());
+      return 1;
+    }
+
+    jeux.sdl.gl_ctx = SDL_GL_CreateContext(jeux.sdl.window);
   }
 
-  SDL_GLContext gl = SDL_GL_CreateContext(sdl_window);
+  gl_init();
 
+  return SDL_APP_CONTINUE;
+}
+
+SDL_AppResult SDL_AppIterate(void *appstate) {
+
+  /* render */
+  {
+    glViewport(0, 0, jeux.window_size_x, jeux.window_size_y);
+
+    {
+      glBindFramebuffer(GL_FRAMEBUFFER, jeux.gl.screen.pp_fb);
+
+      glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
+      glClear(GL_COLOR_BUFFER_BIT);
+
+      glBindTexture(GL_TEXTURE_2D, jeux.gl.tex);
+      glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+
+    {
+      glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+      glBindTexture(GL_TEXTURE_2D, jeux.gl.screen.pp_tex);
+      glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+  }
+
+  SDL_GL_SwapWindow(jeux.sdl.window);
+  return SDL_APP_CONTINUE;
+}
+
+static void gl_resize(void);
+SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
+  if (event->type == SDL_EVENT_QUIT) return SDL_APP_SUCCESS;
+  if (event->type == SDL_EVENT_WINDOW_RESIZED) {
+    jeux.window_size_x = event->window.data1;
+    jeux.window_size_y = event->window.data2;
+    gl_resize();
+  }
+
+  return SDL_APP_CONTINUE;
+}
+
+void SDL_AppQuit(void *appstate, SDL_AppResult result) {
+  SDL_GL_DestroyContext(jeux.sdl.gl_ctx);
+  SDL_DestroyWindow(jeux.sdl.window);
+}
+
+/* gl renderer init - expects jeux.sdl.gl to be initialized */
+static void gl_resize(void);
+static void gl_init(void) {
   /* shader */
-  GLuint geo_shader = glCreateProgram();
+  jeux.gl.geo_shader = glCreateProgram();
   {
     const GLchar* vs_geo =
       "attribute vec4 a_pos;                         \n"
@@ -82,10 +165,10 @@ int main(int argc, char** argv) {
       }
     }
 
-    glAttachShader(geo_shader, vs_shader);
-    glAttachShader(geo_shader, fs_shader);
-    glLinkProgram(geo_shader);
-    glUseProgram(geo_shader);
+    glAttachShader(jeux.gl.geo_shader, vs_shader);
+    glAttachShader(jeux.gl.geo_shader, fs_shader);
+    glLinkProgram(jeux.gl.geo_shader);
+    glUseProgram(jeux.gl.geo_shader);
   }
 
   /* geometry */
@@ -103,71 +186,17 @@ int main(int argc, char** argv) {
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
     /* shader data layout */
-    GLint attr_pos = glGetAttribLocation(geo_shader, "a_pos");
+    GLint attr_pos = glGetAttribLocation(jeux.gl.geo_shader, "a_pos");
     glEnableVertexAttribArray(attr_pos);
     glVertexAttribPointer(attr_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
   }
 
-  /* create framebuffer */
-  GLuint rb, rb_tex, rb_fb;
+  gl_resize();
+
+  /* create texture - writes to jeux.gl.tex */
   {
-    glGenFramebuffers(1, &rb_fb);
-    glBindFramebuffer(GL_FRAMEBUFFER, rb_fb);
-
-    glGenTextures(1, &rb_tex);
-    glBindTexture(GL_TEXTURE_2D, rb_tex);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);                             
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-    glTexImage2D(
-      /* GLenum  target         */ GL_TEXTURE_2D,
-      /* GLint   level          */ 0,
-      /* GLint   internalFormat */ GL_RGB,
-      /* GLsizei width          */ window_size_x,
-      /* GLsizei height         */ window_size_y,
-      /* GLint   border         */ 0,
-      /* GLenum  format         */ GL_RGB,
-      /* GLenum  type           */ GL_UNSIGNED_BYTE,
-      /* const void *data       */ 0
-    );
-
-     glFramebufferTexture2D(
-       GL_FRAMEBUFFER,
-       GL_COLOR_ATTACHMENT0,
-       GL_TEXTURE_2D,
-       rb_tex,
-       0
-     );
-
-     glGenRenderbuffers(1, &rb);
-     glBindRenderbuffer(GL_RENDERBUFFER, rb);
-
-     glRenderbufferStorage(
-       GL_RENDERBUFFER,
-       GL_RGB565,
-       window_size_x,
-       window_size_y
-     );
-     glFramebufferRenderbuffer(
-       GL_FRAMEBUFFER,
-       GL_COLOR_ATTACHMENT0,
-       GL_RENDERBUFFER,
-       rb
-     );
-
-     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-     if (status != GL_FRAMEBUFFER_COMPLETE) {
-       SDL_Log("couldn't make render buffer: n%xn", status);
-     }
-  }
-
-  /* create texture */
-  GLuint tex;
-  {
-     glGenTextures(1, &tex);
-     glBindTexture(GL_TEXTURE_2D, tex);
+     glGenTextures(1, &jeux.gl.tex);
+     glBindTexture(GL_TEXTURE_2D, jeux.gl.tex);
      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);                             
      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -196,39 +225,49 @@ int main(int argc, char** argv) {
        /* const void *data       */ data
      );
   }
+}
 
-  glViewport(0, 0, window_size_x, window_size_y);
+/* recreates jeux.gl.screen resources to match new jeux.window_size */
+static void gl_resize(void) {
+  /* passing in zero is ignored here, so this doesn't throw an error if screen has never inited */
+  glDeleteFramebuffers(1, &jeux.gl.screen.pp_fb);
+  glDeleteTextures(1, &jeux.gl.screen.pp_tex);
 
-  while (true) {
-    SDL_Event event;
-    while (SDL_PollEvent(&event) != 0)
-      if (event.type == SDL_EVENT_QUIT)
-        goto quit;
+  /* create postprocessing framebuffer - writes to jeux.gl.screen.pp_tex, jeux.gl.screen.pp_fb */
+  {
+    glGenFramebuffers(1, &jeux.gl.screen.pp_fb);
+    glBindFramebuffer(GL_FRAMEBUFFER, jeux.gl.screen.pp_fb);
 
-    {
-      glBindRenderbuffer(GL_RENDERBUFFER, rb);
-      glBindFramebuffer(GL_FRAMEBUFFER, rb_fb);
+    glGenTextures(1, &jeux.gl.screen.pp_tex);
+    glBindTexture(GL_TEXTURE_2D, jeux.gl.screen.pp_tex);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);                             
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-      glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
-      glClear(GL_COLOR_BUFFER_BIT);
+    glTexImage2D(
+      /* GLenum  target         */ GL_TEXTURE_2D,
+      /* GLint   level          */ 0,
+      /* GLint   internalFormat */ GL_RGBA,
+      /* GLsizei width          */ jeux.window_size_x,
+      /* GLsizei height         */ jeux.window_size_y,
+      /* GLint   border         */ 0,
+      /* GLenum  format         */ GL_RGBA,
+      /* GLenum  type           */ GL_UNSIGNED_BYTE,
+      /* const void *data       */ 0
+    );
 
-      glBindTexture(GL_TEXTURE_2D, tex);
-      glDrawArrays(GL_TRIANGLES, 0, 3);
-    }
+     glFramebufferTexture2D(
+       GL_FRAMEBUFFER,
+       GL_COLOR_ATTACHMENT0,
+       GL_TEXTURE_2D,
+       jeux.gl.screen.pp_tex,
+       0
+     );
 
-    {
-      glBindRenderbuffer(GL_RENDERBUFFER, 0);
-      glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-      glBindTexture(GL_TEXTURE_2D, rb_tex);
-      glDrawArrays(GL_TRIANGLES, 0, 3);
-    }
-
-    SDL_GL_SwapWindow(sdl_window);
+     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+     if (status != GL_FRAMEBUFFER_COMPLETE) {
+       SDL_Log("couldn't make render buffer: n%xn", status);
+     }
   }
-quit:
-
-  SDL_GL_DestroyContext(gl);
-  SDL_DestroyWindow(sdl_window);
-  return 0;
 }
