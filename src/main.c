@@ -29,59 +29,110 @@ int main(int argc, char** argv) {
   SDL_GLContext gl = SDL_GL_CreateContext(sdl_window);
 
   /* shader */
-  GLuint shaderProgram = glCreateProgram();
+  GLuint geo_shader = glCreateProgram();
   {
-    // Vertex shader
-    const GLchar* vertexSource =
-      "attribute vec4 position;                      \n"
-      "varying vec3 color;                           \n"
+    const GLchar* vs_geo =
+      "attribute vec4 a_pos;                         \n"
+      "varying vec2 v_uv;                            \n"
       "void main()                                   \n"
       "{                                             \n"
-      "    gl_Position = vec4(position.xyz, 1.0);    \n"
-      "    color = gl_Position.xyz + vec3(0.5);      \n"
+      "    gl_Position = vec4(a_pos.xyz, 1.0);       \n"
+      "    v_uv = gl_Position.xy*0.5 + vec2(0.5);    \n"
       "}                                             \n";
 
-    // Fragment/pixel shader
-    const GLchar* fragmentSource =
-      "precision mediump float;                     \n"
-      "varying vec3 color;                          \n"
-      "void main()                                  \n"
-      "{                                            \n"
-      "    gl_FragColor = vec4 ( color, 1.0 );      \n"
-      "}                                            \n";
+    const GLchar* fs_geo =
+      "precision mediump float;                            \n"
+      "varying vec2 v_uv;                                  \n"
+      "uniform sampler2D u_tex;                            \n"
+      "void main()                                         \n"
+      "{                                                   \n"
+      "    vec3 p = texture2D(u_tex, v_uv).rgb;            \n"
+      "    gl_FragColor = vec4(p, 1.0);                    \n"
+      "}                                                   \n";
 
-    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vertexShader, 1, &vertexSource, NULL);
-    glCompileShader(vertexShader);
+    GLuint vs_shader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vs_shader, 1, &vs_geo, NULL);
+    glCompileShader(vs_shader);
 
-    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragmentShader, 1, &fragmentSource, NULL);
-    glCompileShader(fragmentShader);
+    GLuint fs_shader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(fs_shader, 1, &fs_geo, NULL);
+    glCompileShader(fs_shader);
 
-    glAttachShader(shaderProgram, vertexShader);
-    glAttachShader(shaderProgram, fragmentShader);
-    glLinkProgram(shaderProgram);
-    glUseProgram(shaderProgram);
+    for (int i = 0; i < 2; i++) {
+      GLuint shader = (i == 0) ? vs_shader : fs_shader;
+      char    *name = (i == 0) ? "vs"      : "fs";
+      GLint compiled;
+      glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+      if (compiled != GL_TRUE) {
+        GLint log_length;
+        glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &log_length);
+        if (log_length > 0) {
+          char* log = malloc(log_length);
+          glGetShaderInfoLog(shader, log_length, &log_length, log);
+          SDL_Log("%s compilation failed: %s\n", name, log);
+          free(log);
+        }
+      }
+    }
+
+    glAttachShader(geo_shader, vs_shader);
+    glAttachShader(geo_shader, fs_shader);
+    glLinkProgram(geo_shader);
+    glUseProgram(geo_shader);
   }
 
   /* geometry */
   {
-    // Create vertex buffer object and copy vertex data into it
+    /* create vbo, fill it */
     GLuint vbo;
     glGenBuffers(1, &vbo);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     GLfloat vertices[] = 
     {
-       0.0f,  0.5f, 0.0f,
-      -0.5f, -0.5f, 0.0f,
-       0.5f, -0.5f, 0.0f
+      -1.0f,  3.0f, 0.0f,
+      -1.0f, -1.0f, 0.0f,
+       3.0f, -1.0f, 0.0f
     };
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
-    // Specify the layout of the shader vertex data (positions only, 3 floats)
-    GLint posAttrib = glGetAttribLocation(shaderProgram, "position");
-    glEnableVertexAttribArray(posAttrib);
-    glVertexAttribPointer(posAttrib, 3, GL_FLOAT, GL_FALSE, 0, 0);
+    /* shader data layout */
+    GLint attr_pos = glGetAttribLocation(geo_shader, "a_pos");
+    glEnableVertexAttribArray(attr_pos);
+    glVertexAttribPointer(attr_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
+  }
+
+  /* create texture */
+  GLuint tex;
+  {
+     glGenTextures(1, &tex);
+     glBindTexture(GL_TEXTURE_2D, tex);
+     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);                             
+     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+     uint8_t data[4 * 4 * 4] = {0};
+     {
+       int i = 0;
+       for (int x = 0; x < 4; x++)
+         for (int y = 0; y < 4; y++)
+           data[i++] = ((x ^ y)%2) ? 0 : 255,
+           data[i++] = ((x ^ y)%2) ? 0 : 255,
+           data[i++] = ((x ^ y)%2) ? 0 : 255,
+           data[i++] = ((x ^ y)%2) ? 0 : 255;
+     }
+
+     glTexImage2D(
+       /* GLenum  target         */ GL_TEXTURE_2D,
+       /* GLint   level          */ 0,
+       /* GLint   internalFormat */ GL_RGBA,
+       /* GLsizei width          */ 4,
+       /* GLsizei height         */ 4,
+       /* GLint   border         */ 0,
+       /* GLenum  format         */ GL_RGBA,
+       /* GLenum  type           */ GL_UNSIGNED_BYTE,
+       /* const void *data       */ data
+     );
   }
 
   glViewport(0, 0, 640, 480);

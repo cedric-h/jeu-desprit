@@ -5,15 +5,19 @@ setlocal
 set FLAGS=
 if defined RELEASE (
     echo Building for release...
-    FLAGS=03
-    " for /f "delims=" %%i in (bs\cc_flags_release.txt) do set FLAGS=%FLAGS% %%i
+    set FLAGS=03
+    REM for /f "delims=" %%i in (bs\cc_flags_release.txt) do set FLAGS=%FLAGS% %%i
 ) else (
     echo Building for development...
-    FLAGS=-g
-    " for /f "delims=" %%i in (bs\cc_flags_dev.txt) do set FLAGS=%FLAGS% %%i
+    set FLAGS=-g
+    REM for /f "delims=" %%i in (bs\cc_flags_dev.txt) do set FLAGS=%FLAGS% %%i
 )
 
 cd build
+
+if defined jeux.exe (
+    del jeux.exe
+)
 
 if not exist angle (
     echo ERROR: No build/angle Directory; see Windows section in README
