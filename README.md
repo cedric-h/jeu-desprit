@@ -3,7 +3,7 @@
 "bs" stands for "build scripts" 😘
 
 ## loonix 🐧
-install make, cmake, OpenGLES2, etc.
+install make, cmake, sdl3, pkg-config and OpenGL ES 3 drivers from your package manager.
 ```
 ./bs/linux_install.sh
 ./bs/linux_build.sh
@@ -22,10 +22,49 @@ If you don't have one, you should clone and build ANGLE (TODO: automate this as 
 ./bs/macos_install.sh
 ./bs/macos_build.sh
 ```
+Release build:
+```
+RELEASE=1 ./bs/macos_build.sh
+```
 
 ## Windoze 🪟
-recommended: [raddebugger](https://github.com/EpicGamesExt/raddebugger/), [superliminal](https://superluminal.eu/)
+highly recommended debugger: [raddebugger](https://github.com/EpicGamesExt/raddebugger/)
+
+highly recommended profiler: [superliminal](https://superluminal.eu/)
+
+(call is not needed if using powershell)
 ```
-./bs/windows_bat.sh
-./bs/windows_bat.sh
+call ./bs/win_install.bat
+```
+
+download ANGLE from [here](https://github.com/mmozeiko/build-angle/releases), rename it "angle" and drop it in `build/`
+
+Example:
+```
+move "C:\Users\cedric\Downloads\angle-x64-2025-03-23\angle-x64" "build\angle"
+```
+
+Run install again; you should get a window now
+```
+call ./bs/win_install.bat
+```
+
+Henceforth you can simply call `win_build_run` to build and run:
+```
+call ./bs/win_build_run.bat
+```
+
+Or if you're using a debugger, you may prefer to simply `call win_build.bat`
+```
+call ./bs/win_build.bat
+```
+
+Release build, cmd.exe:
+```
+set RELEASE=1 && bs\win_build.bat
+```
+
+Release build, powershell:
+```
+$env:RELEASE="1"; .\bs\win_build.bat
 ```

@@ -1,12 +1,30 @@
 @echo off
 
-cd build
-clang -o bloom.exe -DWIN32 ^
-  ..\src\main.c glfw_build/src/Debug/glfw3.lib ^
-   -luser32 -lgdi32 -lmsvcrt -lshell32.lib -lvcruntime.lib ^
-   -Iglfw/deps -Iglfw/include ^
-   -Wl,/NODEFAULTLIB:libcmt -Wl,/NODEFAULTLIB:msvcrtd
+setlocal
 
-bloom.exe
+set FLAGS=
+if defined RELEASE (
+    echo Building for release...
+    FLAGS=03
+    " for /f "delims=" %%i in (bs\cc_flags_release.txt) do set FLAGS=%FLAGS% %%i
+) else (
+    echo Building for development...
+    FLAGS=-g
+    " for /f "delims=" %%i in (bs\cc_flags_dev.txt) do set FLAGS=%FLAGS% %%i
+)
+
+cd build
+
+if not exist angle (
+    echo ERROR: No build/angle Directory; see Windows section in README
+    exit /b 1
+)
+
+clang -o jeux.exe %FLAGS% ^
+  ..\src\main.c ^
+   angle\lib\libGLESv2.dll.lib ^
+   SDL\build\SDL3.lib ^
+   -ISDL/include ^
+   -Wl,-subsystem:windows
 
 cd ..
