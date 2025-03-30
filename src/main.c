@@ -53,8 +53,8 @@ int main(int argc, char** argv) {
       "uniform sampler2D u_tex;                            \n"
       "void main()                                         \n"
       "{                                                   \n"
-      "    vec3 p = texture2D(u_tex, v_uv).rgb;            \n"
-      "    gl_FragColor = vec4(p, 1.0);                    \n"
+      "    vec4 p = texture2D(u_tex, v_uv);                \n"
+      "    gl_FragColor = p;                               \n"
       "}                                                   \n";
 
     GLuint vs_shader = glCreateShader(GL_VERTEX_SHADER);
