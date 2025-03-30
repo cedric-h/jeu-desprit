@@ -5,8 +5,7 @@
 #include <SDL3/SDL.h>
 #define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL_main.h>
-#define SDL_USE_BUILTIN_OPENGL_DEFINITIONS
-#include <SDL3/SDL_opengles2.h>
+#include "gl_include/gles3.h"
 
 static struct {
   struct {
@@ -48,7 +47,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, "1");
 #endif
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
 
     jeux.sdl.window = SDL_CreateWindow(
@@ -63,6 +62,10 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     }
 
     jeux.sdl.gl_ctx = SDL_GL_CreateContext(jeux.sdl.window);
+    if (jeux.sdl.window == NULL) {
+      SDL_Log("GL init failed: %s\n", SDL_GetError());
+      return 1;
+    }
   }
 
   gl_init();
@@ -157,7 +160,7 @@ static void gl_init(void) {
         GLint log_length;
         glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &log_length);
         if (log_length > 0) {
-          char* log = malloc(log_length);
+          char *log = malloc(log_length);
           glGetShaderInfoLog(shader, log_length, &log_length, log);
           SDL_Log("%s compilation failed: %s\n", name, log);
           free(log);
