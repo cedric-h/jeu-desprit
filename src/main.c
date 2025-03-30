@@ -20,7 +20,14 @@ int main(int argc, char** argv) {
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
 
-  SDL_Window *sdl_window = SDL_CreateWindow("window", 640, 480, SDL_WINDOW_OPENGL);
+  size_t window_size_x = 640;
+  size_t window_size_y = 480;
+  SDL_Window *sdl_window = SDL_CreateWindow(
+    "jeu desprit",
+    window_size_x,
+    window_size_y,
+    SDL_WINDOW_OPENGL
+  );
   if (sdl_window == NULL) {
     SDL_Log("Window init failed: %s\n", SDL_GetError());
     return 1;
@@ -101,6 +108,61 @@ int main(int argc, char** argv) {
     glVertexAttribPointer(attr_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
   }
 
+  /* create framebuffer */
+  GLuint rb, rb_tex, rb_fb;
+  {
+    glGenFramebuffers(1, &rb_fb);
+    glBindFramebuffer(GL_FRAMEBUFFER, rb_fb);
+
+    glGenTextures(1, &rb_tex);
+    glBindTexture(GL_TEXTURE_2D, rb_tex);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);                             
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glTexImage2D(
+      /* GLenum  target         */ GL_TEXTURE_2D,
+      /* GLint   level          */ 0,
+      /* GLint   internalFormat */ GL_RGB,
+      /* GLsizei width          */ window_size_x,
+      /* GLsizei height         */ window_size_y,
+      /* GLint   border         */ 0,
+      /* GLenum  format         */ GL_RGB,
+      /* GLenum  type           */ GL_UNSIGNED_BYTE,
+      /* const void *data       */ 0
+    );
+
+     glFramebufferTexture2D(
+       GL_FRAMEBUFFER,
+       GL_COLOR_ATTACHMENT0,
+       GL_TEXTURE_2D,
+       rb_tex,
+       0
+     );
+
+     glGenRenderbuffers(1, &rb);
+     glBindRenderbuffer(GL_RENDERBUFFER, rb);
+
+     glRenderbufferStorage(
+       GL_RENDERBUFFER,
+       GL_RGB565,
+       window_size_x,
+       window_size_y
+     );
+     glFramebufferRenderbuffer(
+       GL_FRAMEBUFFER,
+       GL_COLOR_ATTACHMENT0,
+       GL_RENDERBUFFER,
+       rb
+     );
+
+     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+     if (status != GL_FRAMEBUFFER_COMPLETE) {
+       SDL_Log("couldn't make render buffer: n%xn", status);
+     }
+  }
+
   /* create texture */
   GLuint tex;
   {
@@ -135,7 +197,7 @@ int main(int argc, char** argv) {
      );
   }
 
-  glViewport(0, 0, 640, 480);
+  glViewport(0, 0, window_size_x, window_size_y);
 
   while (true) {
     SDL_Event event;
@@ -143,11 +205,24 @@ int main(int argc, char** argv) {
       if (event.type == SDL_EVENT_QUIT)
         goto quit;
 
-    glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
+    {
+      glBindRenderbuffer(GL_RENDERBUFFER, rb);
+      glBindFramebuffer(GL_FRAMEBUFFER, rb_fb);
 
-    // Draw the vertex buffer
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+      glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
+      glClear(GL_COLOR_BUFFER_BIT);
+
+      glBindTexture(GL_TEXTURE_2D, tex);
+      glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+
+    {
+      glBindRenderbuffer(GL_RENDERBUFFER, 0);
+      glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+      glBindTexture(GL_TEXTURE_2D, rb_tex);
+      glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
 
     SDL_GL_SwapWindow(sdl_window);
   }
