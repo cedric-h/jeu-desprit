@@ -9,6 +9,13 @@
 
 #define jx_COUNT(arr) (sizeof(arr) / sizeof((arr)[0]))
 
+#define ANTIALIAS_NONE    0
+#define ANTIALIAS_LINEAR  1
+#define ANTIALIAS_FXAA    2
+#define ANTIALIAS_2xSSAA  3
+#define ANTIALIAS_4xSSAA  4
+#define CURRENT_ALIASING ANTIALIAS_4xSSAA
+
 static struct {
   struct {
     SDL_Window    *window;
@@ -18,9 +25,18 @@ static struct {
   size_t window_size_x, window_size_y;
 
   struct {
-    struct { GLuint pp, geo; } shader;
+    struct {
+      GLuint pp;
+      GLint pp_u_win_size;
+
+      GLuint geo;
+    } shader;
+    GLuint v_fullscreen;
+    GLuint v_geo;
 
     // GLuint tex;
+
+    float fb_scale;
 
     /* resources inside here need to be recreated
      * when the application window is resized. */
@@ -30,11 +46,20 @@ static struct {
     } screen;
   } gl;
 } jeux = {
-  .window_size_x = 640,
-  .window_size_y = 480
+  .window_size_x = 800,
+  .window_size_y = 450,
+  .gl = {
+#if   CURRENT_ALIASING == ANTIALIAS_4xSSAA
+    .fb_scale = 4.0f
+#elif CURRENT_ALIASING == ANTIALIAS_2xSSAA
+    .fb_scale = 2.0f
+#else
+    .fb_scale = 1.0f
+#endif
+  }
 };
 
-static void gl_init(void);
+static SDL_AppResult gl_init(void);
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 
   /* sdl init */
@@ -57,7 +82,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
       "jeu desprit",
       jeux.window_size_x,
       jeux.window_size_y,
-      SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE
+      SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
     );
     if (jeux.sdl.window == NULL) {
       SDL_Log("Window init failed: %s\n", SDL_GetError());
@@ -71,18 +96,20 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     }
   }
 
-  gl_init();
+  jeux.window_size_x *= SDL_GetWindowPixelDensity(jeux.sdl.window);
+  jeux.window_size_y *= SDL_GetWindowPixelDensity(jeux.sdl.window);
 
-  return SDL_APP_CONTINUE;
+  return gl_init();
 }
 
 SDL_AppResult SDL_AppIterate(void *appstate) {
 
   /* render */
   {
-    glViewport(0, 0, jeux.window_size_x, jeux.window_size_y);
 
     {
+      glViewport(0, 0, jeux.window_size_x*jeux.gl.fb_scale, jeux.window_size_y*jeux.gl.fb_scale);
+
       glBindFramebuffer(GL_FRAMEBUFFER, jeux.gl.screen.pp_fb);
 
       glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
@@ -90,14 +117,19 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
       // glBindTexture(GL_TEXTURE_2D, jeux.gl.tex);
       glUseProgram(jeux.gl.shader.geo);
+      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.v_geo);
       glDrawArrays(GL_TRIANGLES, 0, 3);
     }
 
     {
+      glViewport(0, 0, jeux.window_size_x, jeux.window_size_y);
+
       glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
       glUseProgram(jeux.gl.shader.pp);
+      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.v_fullscreen);
       glBindTexture(GL_TEXTURE_2D, jeux.gl.screen.pp_tex);
+      glUniform2f(jeux.gl.shader.pp_u_win_size, jeux.window_size_x, jeux.window_size_y);
       glDrawArrays(GL_TRIANGLES, 0, 3);
     }
   }
@@ -110,8 +142,8 @@ static void gl_resize(void);
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
   if (event->type == SDL_EVENT_QUIT) return SDL_APP_SUCCESS;
   if (event->type == SDL_EVENT_WINDOW_RESIZED) {
-    jeux.window_size_x = event->window.data1;
-    jeux.window_size_y = event->window.data2;
+    jeux.window_size_x = event->window.data1*SDL_GetWindowPixelDensity(jeux.sdl.window);
+    jeux.window_size_y = event->window.data2*SDL_GetWindowPixelDensity(jeux.sdl.window);
     gl_resize();
   }
 
@@ -125,7 +157,7 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
 
 /* gl renderer init - expects jeux.sdl.gl to be initialized */
 static void gl_resize(void);
-static void gl_init(void) {
+static SDL_AppResult gl_init(void) {
   /* shader */
   {
 
@@ -140,10 +172,9 @@ static void gl_init(void) {
         .vs =
           "attribute vec4 a_pos;                      \n"
           "varying vec3 v_color;                      \n"
-          "void main()                                \n"
-          "{                                          \n"
-          "    gl_Position = vec4(a_pos.xyz, 1.0);    \n"
-          "    v_color = gl_Position.xyz + vec3(0.5); \n"
+          "void main() {                              \n"
+          "  gl_Position = vec4(a_pos.xyz, 1.0);      \n"
+          "  v_color = gl_Position.xyz + vec3(0.5);   \n"
           "}                                          \n"
         ,
         .fs =
@@ -151,7 +182,7 @@ static void gl_init(void) {
           "varying vec3 v_color;                  \n"
           "uniform sampler2D u_tex;               \n"
           "void main() {                          \n"
-          "    gl_FragColor = vec4(v_color, 1.0); \n"
+          "  gl_FragColor = vec4(v_color, 1.0);   \n"
           "}                                      \n"
       },
       {
@@ -161,18 +192,125 @@ static void gl_init(void) {
           "attribute vec4 a_pos;                         \n"
           "varying vec2 v_uv;                            \n"
           "void main() {                                 \n"
-          "    gl_Position = vec4(a_pos.xyz, 1.0);       \n"
-          "    v_uv = gl_Position.xy*0.5 + vec2(0.5);    \n"
+          "  gl_Position = vec4(a_pos.xyz, 1.0);         \n"
+          "  v_uv = gl_Position.xy*0.5 + vec2(0.5);      \n"
           "}                                             \n"
         ,
         .fs =
-          "precision mediump float;             \n"
-          "varying vec2 v_uv;                   \n"
-          "uniform sampler2D u_tex;             \n"
-          "void main() {                        \n"
-          "    vec4 p = texture2D(u_tex, v_uv); \n"
-          "    gl_FragColor = p;                \n"
-          "}                                    \n"
+
+// No AA
+#if CURRENT_ALIASING == ANTIALIAS_NONE || CURRENT_ALIASING == ANTIALIAS_LINEAR
+          "precision mediump float;                                                                \n"
+          "varying vec2 v_uv;                                                                      \n"
+          "uniform sampler2D u_tex;                                                                \n"
+          "uniform vec2 u_win_size;                                                                \n"
+          "void main() {                                                                           \n"
+          "  gl_FragColor = texture2D(u_tex, v_uv);\n"
+          "}                                                                                       \n"
+#elif CURRENT_ALIASING == ANTIALIAS_2xSSAA
+          "precision mediump float;                                                                \n"
+          "varying vec2 v_uv;                                                                      \n"
+          "uniform sampler2D u_tex;                                                                \n"
+          "uniform vec2 u_win_size;                                                                \n"
+          "void main() {                                                                           \n"
+          "  vec2 inv_vp = 1.0 / u_win_size;\n"
+          "  gl_FragColor = vec4(0, 0, 0, 1);\n"
+          "  gl_FragColor.xyz += 0.25*texture2D(u_tex, v_uv + (vec2(-0.25, -0.25) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.25*texture2D(u_tex, v_uv + (vec2(+0.25, -0.25) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.25*texture2D(u_tex, v_uv + (vec2(-0.25, +0.25) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.25*texture2D(u_tex, v_uv + (vec2(+0.25, +0.25) * inv_vp)).xyz;\n"
+          "}\n"
+#elif CURRENT_ALIASING == ANTIALIAS_4xSSAA
+          "precision mediump float;                                                                  \n"
+          "varying vec2 v_uv;                                                                        \n"
+          "uniform sampler2D u_tex;                                                                  \n"
+          "uniform vec2 u_win_size;                                                                  \n"
+          "void main() {                                                                             \n"
+          "  vec2 inv_vp = 1.0 / u_win_size;                                                         \n"
+          "  gl_FragColor = vec4(0, 0, 0, 1);                                                        \n"
+          "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2(-0.375, -0.375) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2(-0.375, -0.125) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2(-0.375,  0.125) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2(-0.375,  0.375) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2(-0.125, -0.375) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2(-0.125, -0.125) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2(-0.125,  0.125) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2(-0.125,  0.375) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2( 0.125, -0.375) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2( 0.125, -0.125) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2( 0.125,  0.125) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2( 0.125,  0.375) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2( 0.375, -0.375) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2( 0.375, -0.125) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2( 0.375,  0.125) * inv_vp)).xyz;\n"
+          "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2( 0.375,  0.375) * inv_vp)).xyz;\n"
+          "}\n"
+#elif CURRENT_ALIASING == ANTIALIAS_FXAA
+
+          /* TODO: fix this https://github.com/LiveMirror/NVIDIA-Direct3D-SDK-11/blob/a2d3cc46179364c9faa3e218eff230883badcd79/FXAA/FxaaShader.h#L1 */
+
+          "precision mediump float;                                                                \n"
+          "varying vec2 v_uv;                                                                      \n"
+          "uniform sampler2D u_tex;                                                                \n"
+          "uniform vec2 u_win_size;                                                                \n"
+          "void main() {                                                                           \n"
+            "float FXAA_SPAN_MAX = 8.0;                                                            \n"
+            "float FXAA_REDUCE_MUL = 1.0/8.0;                                                      \n"
+            "float FXAA_REDUCE_MIN = (1.0/128.0);                                                  \n"
+
+            "vec2 inv_vp = 1.0 / u_win_size;\n"
+            "vec3 rgbNW = texture2D(u_tex, v_uv + (vec2(-0.5, -0.5) * inv_vp)).xyz;\n"
+            "vec3 rgbNE = texture2D(u_tex, v_uv + (vec2(+0.5, -0.5) * inv_vp)).xyz;\n"
+            "vec3 rgbSW = texture2D(u_tex, v_uv + (vec2(-0.5, +0.5) * inv_vp)).xyz;\n"
+            "vec3 rgbSE = texture2D(u_tex, v_uv + (vec2(+0.5, +0.5) * inv_vp)).xyz;\n"
+            "vec3 rgbM  = texture2D(u_tex, v_uv).xyz;                                 \n"
+
+            "vec3 luma = vec3(0.299, 0.587, 0.114);                                                \n"
+            "float lumaNW = dot(rgbNW, luma);                                                      \n"
+            "float lumaNE = dot(rgbNE, luma);                                                      \n"
+            "float lumaSW = dot(rgbSW, luma);                                                      \n"
+            "float lumaSE = dot(rgbSE, luma);                                                      \n"
+            "float lumaM  = dot( rgbM, luma);                                                      \n"
+          
+            "float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));            \n"
+            "float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));            \n"
+          
+            "vec2 dir;                                                                             \n"
+            "dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));                                     \n"
+            "dir.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));                                     \n"
+          
+            "float dirReduce = max(                                                                \n"
+            "  (lumaNW + lumaNE + lumaSW + lumaSE) * (0.25 * FXAA_REDUCE_MUL),                     \n"
+            "  FXAA_REDUCE_MIN                                                                     \n"
+            ");                                                                                    \n"
+
+            "float rcpDirMin = 1.0/(min(abs(dir.x), abs(dir.y)) + dirReduce);                      \n"
+          
+            "dir = min(\n"
+            "  vec2(FXAA_SPAN_MAX,  FXAA_SPAN_MAX),                                        \n"
+            "  max(vec2(-FXAA_SPAN_MAX, -FXAA_SPAN_MAX), dir * rcpDirMin)\n"
+            ") * inv_vp;       \n"
+
+            "vec3 rgbA = (1.0/2.0) * (                                                             \n"
+            "  texture2D(u_tex, v_uv + dir * (1.0/3.0 - 0.5)).xyz +                   \n"
+            "  texture2D(u_tex, v_uv + dir * (2.0/3.0 - 0.5)).xyz                     \n"
+            ");                                                                                    \n"
+            "vec3 rgbB = rgbA * (1.0/2.0) + (1.0/4.0) * (                                          \n"
+            "  texture2D(u_tex, v_uv + dir * (0.0/3.0 - 0.5)).xyz +                   \n"
+            "  texture2D(u_tex, v_uv + dir * (3.0/3.0 - 0.5)).xyz                     \n"
+            ");                                                                                    \n"
+            "float lumaB = dot(rgbB, luma);                                                        \n"
+
+            "if((lumaB < lumaMin) || (lumaB > lumaMax)){                                           \n"
+            "    gl_FragColor.xyz=rgbA;                                                            \n"
+            "} else {                                                                              \n"
+            "    gl_FragColor.xyz=rgbB;                                                            \n"
+            "}                                                                                     \n"
+            "gl_FragColor.a = 1.0;                                                                 \n"
+          "}                                                                                       \n"
+#else
+#error "no such aliasing!"
+#endif
       }
     };
 
@@ -201,6 +339,8 @@ static void gl_init(void) {
             glGetShaderInfoLog(shader, log_length, &log_length, log);
             SDL_Log("%s %s compilation failed: %s\n", shaders[shader_index].debug_name, s_name, log);
             free(log);
+
+            return SDL_APP_FAILURE;
           }
         }
       }
@@ -213,17 +353,33 @@ static void gl_init(void) {
     }
   }
 
-  /* geometry */
+  /* fullscreen tri for post-processing */
   {
     /* create vbo, fill it */
-    GLuint vbo;
-    glGenBuffers(1, &vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    GLfloat vertices[] = 
-    {
+    glGenBuffers(1, &jeux.gl.v_fullscreen);
+    glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.v_fullscreen);
+    GLfloat vertices[] = {
       -1.0f,  3.0f, 0.0f,
       -1.0f, -1.0f, 0.0f,
        3.0f, -1.0f, 0.0f
+    };
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    jeux.gl.shader.pp_u_win_size = glGetUniformLocation(jeux.gl.shader.pp, "u_win_size");
+
+    GLint attr_pos = glGetAttribLocation(jeux.gl.shader.pp, "a_pos");
+    glEnableVertexAttribArray(attr_pos);
+    glVertexAttribPointer(attr_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
+  }
+
+  /* dynamic geometry buffer */
+  {
+    glGenBuffers(1, &jeux.gl.v_geo);
+    glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.v_geo);
+    GLfloat vertices[] = {
+         0.0f,  0.5f, 0.0f,
+        -0.5f, -0.5f, 0.0f,
+         0.5f, -0.5f, 0.0f
     };
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
@@ -267,6 +423,8 @@ static void gl_init(void) {
   //      /* const void *data       */ data
   //    );
   // }
+
+  return SDL_APP_CONTINUE;
 }
 
 /* recreates jeux.gl.screen resources to match new jeux.window_size */
@@ -282,8 +440,13 @@ static void gl_resize(void) {
 
     glGenTextures(1, &jeux.gl.screen.pp_tex);
     glBindTexture(GL_TEXTURE_2D, jeux.gl.screen.pp_tex);
+#if CURRENT_ALIASING == ANTIALIAS_LINEAR || CURRENT_ALIASING == ANTIALIAS_FXAA
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+#else
     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);                             
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+#endif
     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
@@ -291,25 +454,25 @@ static void gl_resize(void) {
       /* GLenum  target         */ GL_TEXTURE_2D,
       /* GLint   level          */ 0,
       /* GLint   internalFormat */ GL_RGBA,
-      /* GLsizei width          */ jeux.window_size_x,
-      /* GLsizei height         */ jeux.window_size_y,
+      /* GLsizei width          */ jeux.window_size_x*jeux.gl.fb_scale,
+      /* GLsizei height         */ jeux.window_size_y*jeux.gl.fb_scale,
       /* GLint   border         */ 0,
       /* GLenum  format         */ GL_RGBA,
       /* GLenum  type           */ GL_UNSIGNED_BYTE,
       /* const void *data       */ 0
     );
 
-     glFramebufferTexture2D(
-       GL_FRAMEBUFFER,
-       GL_COLOR_ATTACHMENT0,
-       GL_TEXTURE_2D,
-       jeux.gl.screen.pp_tex,
-       0
-     );
+    glFramebufferTexture2D(
+      GL_FRAMEBUFFER,
+      GL_COLOR_ATTACHMENT0,
+      GL_TEXTURE_2D,
+      jeux.gl.screen.pp_tex,
+      0
+    );
 
-     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-     if (status != GL_FRAMEBUFFER_COMPLETE) {
-       SDL_Log("couldn't make render buffer: n%xn", status);
-     }
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+      SDL_Log("couldn't make render buffer: n%xn", status);
+    }
   }
 }
