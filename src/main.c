@@ -7,6 +7,8 @@
 #include <SDL3/SDL_main.h>
 #include "gl_include/gles3.h"
 
+#include "font.h"
+
 #define jx_COUNT(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 #define ANTIALIAS_NONE    0
@@ -26,15 +28,23 @@ static struct {
 
   struct {
     struct {
-      GLuint pp;
+      GLuint pp; /* postprocessing */
       GLint pp_u_win_size;
+
+      GLuint text;
+      GLint text_u_texsize;
+      GLint text_u_buffer;
+      GLint text_u_gamma;
+      GLint text_a_pos;
 
       GLuint geo;
     } shader;
-    GLuint v_fullscreen;
-    GLuint v_geo;
+    GLuint fullscreen_vtx;
+    GLuint geo_vtx;
 
-    // GLuint tex;
+    GLuint text_vtx;
+    GLuint text_tex;
+    float text_scale;
 
     float fb_scale;
 
@@ -50,12 +60,14 @@ static struct {
   .window_size_y = 450,
   .gl = {
 #if   CURRENT_ALIASING == ANTIALIAS_4xSSAA
-    .fb_scale = 4.0f
+    .fb_scale = 4.0f,
 #elif CURRENT_ALIASING == ANTIALIAS_2xSSAA
-    .fb_scale = 2.0f
+    .fb_scale = 2.0f,
 #else
-    .fb_scale = 1.0f
+    .fb_scale = 1.0f,
 #endif
+
+    .text_scale = 1.0f,
   }
 };
 
@@ -107,29 +119,48 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
   /* render */
   {
 
+    // {
+    //   /* switch to the fb that gets postprocessing applied later */
+    //   glViewport(0, 0, jeux.window_size_x*jeux.gl.fb_scale, jeux.window_size_y*jeux.gl.fb_scale);
+    //   glBindFramebuffer(GL_FRAMEBUFFER, jeux.gl.screen.pp_fb);
+
+    //   /* clear color */
+    //   glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
+    //   glClear(GL_COLOR_BUFFER_BIT);
+
+    //   // glBindTexture(GL_TEXTURE_2D, jeux.gl.tex);
+    //   glUseProgram(jeux.gl.shader.geo);
+    //   glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo_vtx);
+    //   glDrawArrays(GL_TRIANGLES, 0, 3);
+    // }
+
+    // /* stop writing to the framebuffer, start writing to the screen */
+    glViewport(0, 0, jeux.window_size_x, jeux.window_size_y);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // /* draw the contents of the framebuffer with postprocessing/aa applied */
+    // {
+    //   glUseProgram(jeux.gl.shader.pp);
+    //   glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.fullscreen_vtx);
+    //   glBindTexture(GL_TEXTURE_2D, jeux.gl.screen.pp_tex);
+    //   glUniform2f(jeux.gl.shader.pp_u_win_size, jeux.window_size_x, jeux.window_size_y);
+    //   glDrawArrays(GL_TRIANGLES, 0, 3);
+    // }
+
+    /* draw text (after pp because it has its own AA) */
     {
-      glViewport(0, 0, jeux.window_size_x*jeux.gl.fb_scale, jeux.window_size_y*jeux.gl.fb_scale);
+      glUseProgram(jeux.gl.shader.text);
 
-      glBindFramebuffer(GL_FRAMEBUFFER, jeux.gl.screen.pp_fb);
+      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.text_vtx);
+      glEnableVertexAttribArray(jeux.gl.shader.text_a_pos);
+      glVertexAttribPointer(jeux.gl.shader.text_a_pos, 4, GL_FLOAT, GL_FALSE, 0, 0);
 
-      glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
-      glClear(GL_COLOR_BUFFER_BIT);
+      glBindTexture(GL_TEXTURE_2D, jeux.gl.text_tex);
+      glUniform2f(jeux.gl.shader.text_u_texsize, 1.0, 1.0);
+      glUniform1f(jeux.gl.shader.text_u_buffer, 0.55);
 
-      // glBindTexture(GL_TEXTURE_2D, jeux.gl.tex);
-      glUseProgram(jeux.gl.shader.geo);
-      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.v_geo);
-      glDrawArrays(GL_TRIANGLES, 0, 3);
-    }
-
-    {
-      glViewport(0, 0, jeux.window_size_x, jeux.window_size_y);
-
-      glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-      glUseProgram(jeux.gl.shader.pp);
-      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.v_fullscreen);
-      glBindTexture(GL_TEXTURE_2D, jeux.gl.screen.pp_tex);
-      glUniform2f(jeux.gl.shader.pp_u_win_size, jeux.window_size_x, jeux.window_size_y);
+      float gamma = 2.0;
+      glUniform1f(jeux.gl.shader.text_u_gamma,  gamma * 1.4142 / jeux.gl.text_scale);
       glDrawArrays(GL_TRIANGLES, 0, 3);
     }
   }
@@ -184,6 +215,36 @@ static SDL_AppResult gl_init(void) {
           "void main() {                          \n"
           "  gl_FragColor = vec4(v_color, 1.0);   \n"
           "}                                      \n"
+      },
+      {
+        .dst = &jeux.gl.shader.text,
+        .debug_name = "text",
+        .vs =
+          "attribute vec4 a_pos;\n"
+          "\n"
+          "uniform vec2 u_texsize;\n"
+          "\n"
+          "varying vec2 v_uv;\n"
+          "\n"
+          "void main() {\n"
+          "  gl_Position = vec4(a_pos.xy, 0.0, 1.0);\n"
+          "  v_uv = a_pos.zw / u_texsize;\n"
+          "}\n"
+        ,
+        .fs =
+          "precision mediump float;\n"
+          "\n"
+          "varying vec2 v_uv;\n"
+          "\n"
+          "uniform sampler2D u_tex;\n"
+          "uniform float u_buffer;\n"
+          "uniform float u_gamma;\n"
+          "\n"
+          "void main() {\n"
+          "  float dist = texture2D(u_tex, v_uv).r;\n"
+          "  float alpha = smoothstep(u_buffer - u_gamma, u_buffer + u_gamma, dist);\n"
+          "  gl_FragColor = vec4(alpha);\n"
+          "}\n"
       },
       {
         .dst = &jeux.gl.shader.pp,
@@ -337,7 +398,12 @@ static SDL_AppResult gl_init(void) {
           if (log_length > 0) {
             char *log = malloc(log_length);
             glGetShaderInfoLog(shader, log_length, &log_length, log);
-            SDL_Log("%s %s compilation failed: %s\n", shaders[shader_index].debug_name, s_name, log);
+            SDL_Log(
+              "\n\n%s %s compilation failed:\n\n%s\n",
+              shaders[shader_index].debug_name,
+              s_name,
+              log
+            );
             free(log);
 
             return SDL_APP_FAILURE;
@@ -356,8 +422,8 @@ static SDL_AppResult gl_init(void) {
   /* fullscreen tri for post-processing */
   {
     /* create vbo, fill it */
-    glGenBuffers(1, &jeux.gl.v_fullscreen);
-    glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.v_fullscreen);
+    glGenBuffers(1, &jeux.gl.fullscreen_vtx);
+    glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.fullscreen_vtx);
     GLfloat vertices[] = {
       -1.0f,  3.0f, 0.0f,
       -1.0f, -1.0f, 0.0f,
@@ -372,10 +438,28 @@ static SDL_AppResult gl_init(void) {
     glVertexAttribPointer(attr_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
   }
 
+  /* dynamic text buffer */
+  {
+    /* create vbo, fill it */
+    glGenBuffers(1, &jeux.gl.text_vtx);
+    glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.text_vtx);
+    GLfloat vertices[] = {
+      -1.0f,  3.0f, 0.0f, 2.0f,
+      -1.0f, -1.0f, 0.0f, 0.0f,
+       3.0f, -1.0f, 2.0f, 0.0f
+    };
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    jeux.gl.shader.text_u_buffer  = glGetUniformLocation(jeux.gl.shader.text, "u_buffer" );
+    jeux.gl.shader.text_u_gamma   = glGetUniformLocation(jeux.gl.shader.text, "u_gamma"  );
+    jeux.gl.shader.text_u_texsize = glGetUniformLocation(jeux.gl.shader.text, "u_texsize");
+    jeux.gl.shader.text_a_pos     = glGetAttribLocation( jeux.gl.shader.text, "a_pos"    );
+  }
+
   /* dynamic geometry buffer */
   {
-    glGenBuffers(1, &jeux.gl.v_geo);
-    glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.v_geo);
+    glGenBuffers(1, &jeux.gl.geo_vtx);
+    glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo_vtx);
     GLfloat vertices[] = {
          0.0f,  0.5f, 0.0f,
         -0.5f, -0.5f, 0.0f,
@@ -392,37 +476,37 @@ static SDL_AppResult gl_init(void) {
   gl_resize();
 
   /* create texture - writes to jeux.gl.tex */
-  // {
-  //    glGenTextures(1, &jeux.gl.tex);
-  //    glBindTexture(GL_TEXTURE_2D, jeux.gl.tex);
-  //    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  //    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-  //    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  //    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  {
+     glGenTextures(1, &jeux.gl.text_tex);
+     glBindTexture(GL_TEXTURE_2D, jeux.gl.text_tex);
+     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-  //    uint8_t data[4 * 4 * 4] = {0};
-  //    {
-  //      int i = 0;
-  //      for (int x = 0; x < 4; x++)
-  //        for (int y = 0; y < 4; y++)
-  //          data[i++] = ((x ^ y)%2) ? 0 : 255,
-  //          data[i++] = ((x ^ y)%2) ? 0 : 255,
-  //          data[i++] = ((x ^ y)%2) ? 0 : 255,
-  //          data[i++] = ((x ^ y)%2) ? 0 : 255;
-  //    }
+     uint8_t data[4 * 4 * 4] = {0};
+     {
+       int i = 0;
+       for (int x = 0; x < 4; x++)
+         for (int y = 0; y < 4; y++)
+           data[i++] = ((x ^ y)%2) ? 0 : 255,
+           data[i++] = ((x ^ y)%2) ? 0 : 255,
+           data[i++] = ((x ^ y)%2) ? 0 : 255,
+           data[i++] = ((x ^ y)%2) ? 0 : 255;
+     }
 
-  //    glTexImage2D(
-  //      /* GLenum  target         */ GL_TEXTURE_2D,
-  //      /* GLint   level          */ 0,
-  //      /* GLint   internalFormat */ GL_RGBA,
-  //      /* GLsizei width          */ 4,
-  //      /* GLsizei height         */ 4,
-  //      /* GLint   border         */ 0,
-  //      /* GLenum  format         */ GL_RGBA,
-  //      /* GLenum  type           */ GL_UNSIGNED_BYTE,
-  //      /* const void *data       */ data
-  //    );
-  // }
+     glTexImage2D(
+       /* GLenum  target         */ GL_TEXTURE_2D,
+       /* GLint   level          */ 0,
+       /* GLint   internalFormat */ GL_RGBA,
+       /* GLsizei width          */ 4,
+       /* GLsizei height         */ 4,
+       /* GLint   border         */ 0,
+       /* GLenum  format         */ GL_RGBA,
+       /* GLenum  type           */ GL_UNSIGNED_BYTE,
+       /* const void *data       */ data
+     );
+  }
 
   return SDL_APP_CONTINUE;
 }
