@@ -71,7 +71,7 @@ static struct {
     .fb_scale = 1.0f,
 #endif
 
-    .text_scale = 1.0f,
+    .text_scale = 3.0f,
   }
 };
 
@@ -114,6 +114,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 
   jeux.window_size_x *= SDL_GetWindowPixelDensity(jeux.sdl.window);
   jeux.window_size_y *= SDL_GetWindowPixelDensity(jeux.sdl.window);
+  jeux.gl.text_scale *= SDL_GetWindowPixelDensity(jeux.sdl.window);
 
   return gl_init();
 }
@@ -177,7 +178,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       glEnable(GL_BLEND);
 
       float gamma = 2.0;
-      glUniform1f(jeux.gl.shader.text_u_gamma,  gamma * 1.4142 / 22);
+      glUniform1f(jeux.gl.shader.text_u_gamma,  (gamma * 1.4142) / (22.0f * jeux.gl.text_scale));
       glDrawElements(GL_TRIANGLES, (sizeof("hi! i'm ced :)") - 1)*3*2, GL_UNSIGNED_SHORT, 0);
 
       glDisable(GL_BLEND);
@@ -477,16 +478,18 @@ static SDL_AppResult gl_init(void) {
       uint16_t start = vtx_wtr - vtx;
 
       float x = pen_x;
-      float y = pen_y + l->top;
-      *vtx_wtr++ = (Vtx) { x + l->size_x,  y - l->size_y, l->x + l->size_x, l->y + l->size_y };
-      *vtx_wtr++ = (Vtx) { x + l->size_x,  y            , l->x + l->size_x, l->y             };
-      *vtx_wtr++ = (Vtx) { x            ,  y            , l->x            , l->y             };
-      *vtx_wtr++ = (Vtx) { x            ,  y - l->size_y, l->x            , l->y + l->size_y };
+      float y = pen_y + l->top * jeux.gl.text_scale;
+      float size_x = l->size_x * jeux.gl.text_scale;
+      float size_y = l->size_y * jeux.gl.text_scale;
+      *vtx_wtr++ = (Vtx) { x + size_x,  y - size_y, l->x + l->size_x, l->y + l->size_y };
+      *vtx_wtr++ = (Vtx) { x + size_x,  y         , l->x + l->size_x, l->y             };
+      *vtx_wtr++ = (Vtx) { x         ,  y         , l->x            , l->y             };
+      *vtx_wtr++ = (Vtx) { x         ,  y - size_y, l->x            , l->y + l->size_y };
 
       *idx_wtr++ = (Tri) { start + 0, start + 1, start + 2 };
       *idx_wtr++ = (Tri) { start + 2, start + 3, start + 0 };
 
-      pen_x += l->advance;
+      pen_x += l->advance * jeux.gl.text_scale;
     } while (*msg++);
 
     {
@@ -529,8 +532,8 @@ static SDL_AppResult gl_init(void) {
   {
      glGenTextures(1, &jeux.gl.text_tex);
      glBindTexture(GL_TEXTURE_2D, jeux.gl.text_tex);
-     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
