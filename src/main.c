@@ -484,25 +484,28 @@ static SDL_AppResult gl_init(void) {
      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-     uint8_t data[4 * 4 * 4] = {0};
-     {
-       int i = 0;
-       for (int x = 0; x < 4; x++)
-         for (int y = 0; y < 4; y++)
-           data[i++] = ((x ^ y)%2) ? 0 : 255,
-           data[i++] = ((x ^ y)%2) ? 0 : 255,
-           data[i++] = ((x ^ y)%2) ? 0 : 255,
-           data[i++] = ((x ^ y)%2) ? 0 : 255;
+     uint8_t data[font_TEX_SIZE_X * font_TEX_SIZE_Y * 4] = {0};
+     for (int letter_idx = 0; letter_idx < jx_COUNT(font_letter_regions); letter_idx++) {
+       font_LetterRegion *lr = font_letter_regions + letter_idx;
+
+       size_t i = lr->data_start;
+       for (int pixel_y = 0; pixel_y < lr->size_y; pixel_y++)
+         for (int pixel_x = 0; pixel_x < lr->size_x; pixel_x++) {
+           size_t x = lr->x + pixel_x;
+           size_t y = lr->y + pixel_y;
+           y = font_TEX_SIZE_Y - 1 - y; /* flip! */
+           data[font_TEX_SIZE_X*y + x] = font_tex_bytes[i++];
+         }
      }
 
      glTexImage2D(
        /* GLenum  target         */ GL_TEXTURE_2D,
        /* GLint   level          */ 0,
-       /* GLint   internalFormat */ GL_RGBA,
-       /* GLsizei width          */ 4,
-       /* GLsizei height         */ 4,
+       /* GLint   internalFormat */ GL_R8,
+       /* GLsizei width          */ font_TEX_SIZE_X,
+       /* GLsizei height         */ font_TEX_SIZE_Y,
        /* GLint   border         */ 0,
-       /* GLenum  format         */ GL_RGBA,
+       /* GLenum  format         */ GL_RED,
        /* GLenum  type           */ GL_UNSIGNED_BYTE,
        /* const void *data       */ data
      );
