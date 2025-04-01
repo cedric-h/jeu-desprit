@@ -30,19 +30,23 @@ static struct {
     struct {
       GLuint pp; /* postprocessing */
       GLint pp_u_win_size;
+      GLint pp_a_pos;
 
       GLuint text;
-      GLint text_u_texsize;
+      GLint text_u_tex_size;
+      GLint text_u_win_size;
       GLint text_u_buffer;
       GLint text_u_gamma;
       GLint text_a_pos;
 
       GLuint geo;
+      GLint geo_a_pos;
     } shader;
     GLuint fullscreen_vtx;
     GLuint geo_vtx;
 
     GLuint text_vtx;
+    GLuint text_idx;
     GLuint text_tex;
     float text_scale;
 
@@ -119,49 +123,64 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
   /* render */
   {
 
-    // {
-    //   /* switch to the fb that gets postprocessing applied later */
-    //   glViewport(0, 0, jeux.window_size_x*jeux.gl.fb_scale, jeux.window_size_y*jeux.gl.fb_scale);
-    //   glBindFramebuffer(GL_FRAMEBUFFER, jeux.gl.screen.pp_fb);
+    {
+      /* switch to the fb that gets postprocessing applied later */
+      glViewport(0, 0, jeux.window_size_x*jeux.gl.fb_scale, jeux.window_size_y*jeux.gl.fb_scale);
+      glBindFramebuffer(GL_FRAMEBUFFER, jeux.gl.screen.pp_fb);
 
-    //   /* clear color */
-    //   glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
-    //   glClear(GL_COLOR_BUFFER_BIT);
+      /* clear color */
+      glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
+      glClear(GL_COLOR_BUFFER_BIT);
 
-    //   // glBindTexture(GL_TEXTURE_2D, jeux.gl.tex);
-    //   glUseProgram(jeux.gl.shader.geo);
-    //   glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo_vtx);
-    //   glDrawArrays(GL_TRIANGLES, 0, 3);
-    // }
+      glUseProgram(jeux.gl.shader.geo);
 
-    // /* stop writing to the framebuffer, start writing to the screen */
+      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo_vtx);
+      glEnableVertexAttribArray(jeux.gl.shader.geo_a_pos);
+      glVertexAttribPointer(jeux.gl.shader.geo_a_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
+
+      glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+
+    /* stop writing to the framebuffer, start writing to the screen */
     glViewport(0, 0, jeux.window_size_x, jeux.window_size_y);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    // /* draw the contents of the framebuffer with postprocessing/aa applied */
-    // {
-    //   glUseProgram(jeux.gl.shader.pp);
-    //   glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.fullscreen_vtx);
-    //   glBindTexture(GL_TEXTURE_2D, jeux.gl.screen.pp_tex);
-    //   glUniform2f(jeux.gl.shader.pp_u_win_size, jeux.window_size_x, jeux.window_size_y);
-    //   glDrawArrays(GL_TRIANGLES, 0, 3);
-    // }
+    /* draw the contents of the framebuffer with postprocessing/aa applied */
+    {
+      glUseProgram(jeux.gl.shader.pp);
+      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.fullscreen_vtx);
+      glEnableVertexAttribArray(jeux.gl.shader.pp_a_pos);
+      glVertexAttribPointer(jeux.gl.shader.pp_a_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
+
+      glBindTexture(GL_TEXTURE_2D, jeux.gl.screen.pp_tex);
+      glUniform2f(jeux.gl.shader.pp_u_win_size, jeux.window_size_x, jeux.window_size_y);
+      glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
 
     /* draw text (after pp because it has its own AA) */
     {
       glUseProgram(jeux.gl.shader.text);
+
+      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, jeux.gl.text_idx);
 
       glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.text_vtx);
       glEnableVertexAttribArray(jeux.gl.shader.text_a_pos);
       glVertexAttribPointer(jeux.gl.shader.text_a_pos, 4, GL_FLOAT, GL_FALSE, 0, 0);
 
       glBindTexture(GL_TEXTURE_2D, jeux.gl.text_tex);
-      glUniform2f(jeux.gl.shader.text_u_texsize, 1.0, 1.0);
-      glUniform1f(jeux.gl.shader.text_u_buffer, 0.55);
+      glUniform2f(jeux.gl.shader.text_u_tex_size, font_TEX_SIZE_X, font_TEX_SIZE_Y);
+      glUniform2f(jeux.gl.shader.text_u_win_size, jeux.window_size_x, jeux.window_size_y);
+      glUniform1f(jeux.gl.shader.text_u_buffer, 0.65);
+
+      /* set up premultiplied alpha */
+      glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE);
+      glEnable(GL_BLEND);
 
       float gamma = 2.0;
-      glUniform1f(jeux.gl.shader.text_u_gamma,  gamma * 1.4142 / jeux.gl.text_scale);
-      glDrawArrays(GL_TRIANGLES, 0, 3);
+      glUniform1f(jeux.gl.shader.text_u_gamma,  gamma * 1.4142 / 22);
+      glDrawElements(GL_TRIANGLES, (sizeof("hi! i'm ced :)") - 1)*3*2, GL_UNSIGNED_SHORT, 0);
+
+      glDisable(GL_BLEND);
     }
   }
 
@@ -222,13 +241,15 @@ static SDL_AppResult gl_init(void) {
         .vs =
           "attribute vec4 a_pos;\n"
           "\n"
-          "uniform vec2 u_texsize;\n"
+          "uniform vec2 u_tex_size;\n"
+          "uniform vec2 u_win_size;\n"
           "\n"
           "varying vec2 v_uv;\n"
           "\n"
           "void main() {\n"
-          "  gl_Position = vec4(a_pos.xy, 0.0, 1.0);\n"
-          "  v_uv = a_pos.zw / u_texsize;\n"
+          "  gl_Position = vec4(a_pos.xy / u_win_size, 0.0, 1.0);\n"
+          "  gl_Position.xy = gl_Position.xy*2.0 - 1.0;\n"
+          "  v_uv = a_pos.zw / u_tex_size;\n"
           "}\n"
         ,
         .fs =
@@ -424,53 +445,82 @@ static SDL_AppResult gl_init(void) {
     /* create vbo, fill it */
     glGenBuffers(1, &jeux.gl.fullscreen_vtx);
     glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.fullscreen_vtx);
-    GLfloat vertices[] = {
+    GLfloat vtx[] = {
       -1.0f,  3.0f, 0.0f,
       -1.0f, -1.0f, 0.0f,
        3.0f, -1.0f, 0.0f
     };
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vtx), vtx, GL_STATIC_DRAW);
 
     jeux.gl.shader.pp_u_win_size = glGetUniformLocation(jeux.gl.shader.pp, "u_win_size");
-
-    GLint attr_pos = glGetAttribLocation(jeux.gl.shader.pp, "a_pos");
-    glEnableVertexAttribArray(attr_pos);
-    glVertexAttribPointer(attr_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
+    jeux.gl.shader.pp_a_pos      = glGetAttribLocation( jeux.gl.shader.pp, "a_pos");
   }
 
   /* dynamic text buffer */
   {
     /* create vbo, fill it */
-    glGenBuffers(1, &jeux.gl.text_vtx);
-    glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.text_vtx);
-    GLfloat vertices[] = {
-      -1.0f,  3.0f, 0.0f, 2.0f,
-      -1.0f, -1.0f, 0.0f, 0.0f,
-       3.0f, -1.0f, 2.0f, 0.0f
-    };
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
-    jeux.gl.shader.text_u_buffer  = glGetUniformLocation(jeux.gl.shader.text, "u_buffer" );
-    jeux.gl.shader.text_u_gamma   = glGetUniformLocation(jeux.gl.shader.text, "u_gamma"  );
-    jeux.gl.shader.text_u_texsize = glGetUniformLocation(jeux.gl.shader.text, "u_texsize");
-    jeux.gl.shader.text_a_pos     = glGetAttribLocation( jeux.gl.shader.text, "a_pos"    );
+    typedef struct { float x, y, w, h; } Vtx;
+    Vtx vtx[999] = {0};
+    Vtx *vtx_wtr = vtx;
+
+    typedef struct { uint16_t a, b, c; } Tri;
+    Tri idx[999] = {0};
+    Tri *idx_wtr = idx;
+
+    char *msg = "hi! i'm ced :)";
+    float pen_x = jeux.window_size_x * 0.5;
+    float pen_y = jeux.window_size_x * 0.5;
+    do {
+      font_LetterRegion *l = &font_letter_regions[(size_t)(*msg)];
+
+      uint16_t start = vtx_wtr - vtx;
+
+      float x = pen_x;
+      float y = pen_y + l->top;
+      *vtx_wtr++ = (Vtx) { x + l->size_x,  y - l->size_y, l->x + l->size_x, l->y + l->size_y };
+      *vtx_wtr++ = (Vtx) { x + l->size_x,  y            , l->x + l->size_x, l->y             };
+      *vtx_wtr++ = (Vtx) { x            ,  y            , l->x            , l->y             };
+      *vtx_wtr++ = (Vtx) { x            ,  y - l->size_y, l->x            , l->y + l->size_y };
+
+      *idx_wtr++ = (Tri) { start + 0, start + 1, start + 2 };
+      *idx_wtr++ = (Tri) { start + 2, start + 3, start + 0 };
+
+      pen_x += l->advance;
+    } while (*msg++);
+
+    {
+      glGenBuffers(1, &jeux.gl.text_vtx);
+      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.text_vtx);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(vtx), vtx, GL_STATIC_DRAW);
+    }
+
+    {
+      glGenBuffers(1, &jeux.gl.text_idx);
+      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.text_idx);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(idx), idx, GL_STATIC_DRAW);
+    }
+
+    jeux.gl.shader.text_u_buffer   = glGetUniformLocation(jeux.gl.shader.text, "u_buffer"  );
+    jeux.gl.shader.text_u_gamma    = glGetUniformLocation(jeux.gl.shader.text, "u_gamma"   );
+    jeux.gl.shader.text_u_tex_size = glGetUniformLocation(jeux.gl.shader.text, "u_tex_size");
+    jeux.gl.shader.text_u_win_size = glGetUniformLocation(jeux.gl.shader.text, "u_win_size");
+    jeux.gl.shader.text_a_pos      = glGetAttribLocation( jeux.gl.shader.text, "a_pos"     );
   }
 
   /* dynamic geometry buffer */
   {
     glGenBuffers(1, &jeux.gl.geo_vtx);
     glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo_vtx);
-    GLfloat vertices[] = {
+    GLfloat vtx[] = {
          0.0f,  0.5f, 0.0f,
         -0.5f, -0.5f, 0.0f,
          0.5f, -0.5f, 0.0f
     };
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vtx), vtx, GL_STATIC_DRAW);
 
     /* shader data layout */
-    GLint attr_pos = glGetAttribLocation(jeux.gl.shader.geo, "a_pos");
-    glEnableVertexAttribArray(attr_pos);
-    glVertexAttribPointer(attr_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
+    jeux.gl.shader.geo_a_pos = glGetAttribLocation(jeux.gl.shader.geo, "a_pos");
   }
 
   gl_resize();
@@ -493,7 +543,6 @@ static SDL_AppResult gl_init(void) {
          for (int pixel_x = 0; pixel_x < lr->size_x; pixel_x++) {
            size_t x = lr->x + pixel_x;
            size_t y = lr->y + pixel_y;
-           y = font_TEX_SIZE_Y - 1 - y; /* flip! */
            data[font_TEX_SIZE_X*y + x] = font_tex_bytes[i++];
          }
      }
