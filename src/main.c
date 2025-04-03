@@ -18,6 +18,9 @@
 #define ANTIALIAS_4xSSAA  4
 #define CURRENT_ALIASING ANTIALIAS_4xSSAA
 
+typedef struct { float x, y, u, v, size; } gl_text_Vtx;
+typedef struct { uint16_t a, b, c; } gl_text_Tri;
+
 static struct {
   struct {
     SDL_Window    *window;
@@ -25,6 +28,7 @@ static struct {
   } sdl;
 
   size_t window_size_x, window_size_y;
+  uint64_t ts_last_frame, ts_first;
 
   struct {
     struct {
@@ -32,23 +36,33 @@ static struct {
       GLint pp_u_win_size;
       GLint pp_a_pos;
 
-      GLuint text;
-      GLint text_u_tex_size;
-      GLint text_u_win_size;
-      GLint text_u_buffer;
-      GLint text_u_gamma;
-      GLint text_a_pos;
-
       GLuint geo;
       GLint geo_a_pos;
     } shader;
     GLuint fullscreen_vtx;
     GLuint geo_vtx;
 
-    GLuint text_vtx;
-    GLuint text_idx;
-    GLuint text_tex;
-    float text_scale;
+    struct {
+      gl_text_Vtx vtx[999];
+      gl_text_Vtx *vtx_wtr;
+
+      gl_text_Tri idx[999];
+      gl_text_Tri *idx_wtr;
+
+      GLuint buf_vtx;
+      GLuint buf_idx;
+
+      GLuint tex;
+
+      GLuint shader;
+      GLint shader_u_tex_size;
+      GLint shader_u_win_size;
+      GLint shader_u_buffer;
+      GLint shader_u_gamma;
+      GLint shader_a_pos;
+      GLint shader_a_uv;
+      GLint shader_a_size;
+    } text;
 
     float fb_scale;
 
@@ -70,8 +84,6 @@ static struct {
 #else
     .fb_scale = 1.0f,
 #endif
-
-    .text_scale = 1.0f,
   }
 };
 
@@ -114,81 +126,11 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 
   jeux.window_size_x *= SDL_GetWindowPixelDensity(jeux.sdl.window);
   jeux.window_size_y *= SDL_GetWindowPixelDensity(jeux.sdl.window);
-  jeux.gl.text_scale *= SDL_GetWindowPixelDensity(jeux.sdl.window);
+  jeux.ts_last_frame = SDL_GetPerformanceCounter();
+  jeux.ts_first = SDL_GetPerformanceCounter();
 
   return gl_init();
 }
-
-SDL_AppResult SDL_AppIterate(void *appstate) {
-
-  /* render */
-  {
-
-    {
-      /* switch to the fb that gets postprocessing applied later */
-      glViewport(0, 0, jeux.window_size_x*jeux.gl.fb_scale, jeux.window_size_y*jeux.gl.fb_scale);
-      glBindFramebuffer(GL_FRAMEBUFFER, jeux.gl.screen.pp_fb);
-
-      /* clear color */
-      glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
-      glClear(GL_COLOR_BUFFER_BIT);
-
-      glUseProgram(jeux.gl.shader.geo);
-
-      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo_vtx);
-      glEnableVertexAttribArray(jeux.gl.shader.geo_a_pos);
-      glVertexAttribPointer(jeux.gl.shader.geo_a_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
-
-      glDrawArrays(GL_TRIANGLES, 0, 3);
-    }
-
-    /* stop writing to the framebuffer, start writing to the screen */
-    glViewport(0, 0, jeux.window_size_x, jeux.window_size_y);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-    /* draw the contents of the framebuffer with postprocessing/aa applied */
-    {
-      glUseProgram(jeux.gl.shader.pp);
-      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.fullscreen_vtx);
-      glEnableVertexAttribArray(jeux.gl.shader.pp_a_pos);
-      glVertexAttribPointer(jeux.gl.shader.pp_a_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
-
-      glBindTexture(GL_TEXTURE_2D, jeux.gl.screen.pp_tex);
-      glUniform2f(jeux.gl.shader.pp_u_win_size, jeux.window_size_x, jeux.window_size_y);
-      glDrawArrays(GL_TRIANGLES, 0, 3);
-    }
-
-    /* draw text (after pp because it has its own AA) */
-    {
-      glUseProgram(jeux.gl.shader.text);
-
-      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, jeux.gl.text_idx);
-
-      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.text_vtx);
-      glEnableVertexAttribArray(jeux.gl.shader.text_a_pos);
-      glVertexAttribPointer(jeux.gl.shader.text_a_pos, 4, GL_FLOAT, GL_FALSE, 0, 0);
-
-      glBindTexture(GL_TEXTURE_2D, jeux.gl.text_tex);
-      glUniform2f(jeux.gl.shader.text_u_tex_size, font_TEX_SIZE_X, font_TEX_SIZE_Y);
-      glUniform2f(jeux.gl.shader.text_u_win_size, jeux.window_size_x, jeux.window_size_y);
-      glUniform1f(jeux.gl.shader.text_u_buffer, 0.7);
-
-      /* set up premultiplied alpha */
-      glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE);
-      glEnable(GL_BLEND);
-
-      float gamma = 2.0;
-      glUniform1f(jeux.gl.shader.text_u_gamma,  (gamma * 1.4142) / (22.0f * jeux.gl.text_scale));
-      glDrawElements(GL_TRIANGLES, (sizeof("hi! i'm ced :)") - 1)*3*2, GL_UNSIGNED_SHORT, 0);
-
-      glDisable(GL_BLEND);
-    }
-  }
-
-  SDL_GL_SwapWindow(jeux.sdl.window);
-  return SDL_APP_CONTINUE;
-}
-
 static void gl_resize(void);
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
   if (event->type == SDL_EVENT_QUIT) return SDL_APP_SUCCESS;
@@ -237,34 +179,39 @@ static SDL_AppResult gl_init(void) {
           "}                                      \n"
       },
       {
-        .dst = &jeux.gl.shader.text,
+        .dst = &jeux.gl.text.shader,
         .debug_name = "text",
         .vs =
-          "attribute vec4 a_pos;\n"
+          "attribute vec2 a_pos;\n"
+          "attribute vec2 a_uv;\n"
+          "attribute float a_size;\n"
           "\n"
           "uniform vec2 u_tex_size;\n"
           "uniform vec2 u_win_size;\n"
+          "uniform float u_gamma;\n"
           "\n"
           "varying vec2 v_uv;\n"
+          "varying float v_gamma;\n"
           "\n"
           "void main() {\n"
-          "  gl_Position = vec4(a_pos.xy / u_win_size, 0.0, 1.0);\n"
+          "  gl_Position = vec4(a_pos / u_win_size, 0.0, 1.0);\n"
           "  gl_Position.xy = gl_Position.xy*2.0 - 1.0;\n"
-          "  v_uv = a_pos.zw / u_tex_size;\n"
+          "  v_uv = a_uv / u_tex_size;\n"
+          "  v_gamma = u_gamma / a_size;\n"
           "}\n"
         ,
         .fs =
           "precision mediump float;\n"
           "\n"
           "varying vec2 v_uv;\n"
+          "varying float v_gamma;\n"
           "\n"
           "uniform sampler2D u_tex;\n"
           "uniform float u_buffer;\n"
-          "uniform float u_gamma;\n"
           "\n"
           "void main() {\n"
           "  float dist = texture2D(u_tex, v_uv).r;\n"
-          "  float alpha = smoothstep(u_buffer - u_gamma, u_buffer + u_gamma, dist);\n"
+          "  float alpha = smoothstep(u_buffer - v_gamma, u_buffer + v_gamma, dist);\n"
           "  gl_FragColor = vec4(alpha);\n"
           "}\n"
       },
@@ -457,60 +404,6 @@ static SDL_AppResult gl_init(void) {
     jeux.gl.shader.pp_a_pos      = glGetAttribLocation( jeux.gl.shader.pp, "a_pos");
   }
 
-  /* dynamic text buffer */
-  {
-    /* create vbo, fill it */
-
-    typedef struct { float x, y, w, h; } Vtx;
-    Vtx vtx[999] = {0};
-    Vtx *vtx_wtr = vtx;
-
-    typedef struct { uint16_t a, b, c; } Tri;
-    Tri idx[999] = {0};
-    Tri *idx_wtr = idx;
-
-    char *msg = "hi! i'm ced :)";
-    float pen_x = jeux.window_size_x * 0.5;
-    float pen_y = jeux.window_size_x * 0.5;
-    do {
-      font_LetterRegion *l = &font_letter_regions[(size_t)(*msg)];
-
-      uint16_t start = vtx_wtr - vtx;
-
-      float x = pen_x;
-      float y = pen_y + l->top * jeux.gl.text_scale;
-      float size_x = l->size_x * jeux.gl.text_scale;
-      float size_y = l->size_y * jeux.gl.text_scale;
-      *vtx_wtr++ = (Vtx) { x + size_x,  y - size_y, l->x + l->size_x, l->y + l->size_y };
-      *vtx_wtr++ = (Vtx) { x + size_x,  y         , l->x + l->size_x, l->y             };
-      *vtx_wtr++ = (Vtx) { x         ,  y         , l->x            , l->y             };
-      *vtx_wtr++ = (Vtx) { x         ,  y - size_y, l->x            , l->y + l->size_y };
-
-      *idx_wtr++ = (Tri) { start + 0, start + 1, start + 2 };
-      *idx_wtr++ = (Tri) { start + 2, start + 3, start + 0 };
-
-      pen_x += l->advance * jeux.gl.text_scale;
-    } while (*msg++);
-
-    {
-      glGenBuffers(1, &jeux.gl.text_vtx);
-      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.text_vtx);
-      glBufferData(GL_ARRAY_BUFFER, sizeof(vtx), vtx, GL_STATIC_DRAW);
-    }
-
-    {
-      glGenBuffers(1, &jeux.gl.text_idx);
-      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.text_idx);
-      glBufferData(GL_ARRAY_BUFFER, sizeof(idx), idx, GL_STATIC_DRAW);
-    }
-
-    jeux.gl.shader.text_u_buffer   = glGetUniformLocation(jeux.gl.shader.text, "u_buffer"  );
-    jeux.gl.shader.text_u_gamma    = glGetUniformLocation(jeux.gl.shader.text, "u_gamma"   );
-    jeux.gl.shader.text_u_tex_size = glGetUniformLocation(jeux.gl.shader.text, "u_tex_size");
-    jeux.gl.shader.text_u_win_size = glGetUniformLocation(jeux.gl.shader.text, "u_win_size");
-    jeux.gl.shader.text_a_pos      = glGetAttribLocation( jeux.gl.shader.text, "a_pos"     );
-  }
-
   /* dynamic geometry buffer */
   {
     glGenBuffers(1, &jeux.gl.geo_vtx);
@@ -528,39 +421,67 @@ static SDL_AppResult gl_init(void) {
 
   gl_resize();
 
-  /* create texture - writes to jeux.gl.tex */
+  /* initialize text rendering */
   {
-     glGenTextures(1, &jeux.gl.text_tex);
-     glBindTexture(GL_TEXTURE_2D, jeux.gl.text_tex);
-     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-     uint8_t data[font_TEX_SIZE_X * font_TEX_SIZE_Y * 4] = {0};
-     for (int letter_idx = 0; letter_idx < jx_COUNT(font_letter_regions); letter_idx++) {
-       font_LetterRegion *lr = font_letter_regions + letter_idx;
+    /* dynamic text buffer */
+    {
+      /* create vbo, filled later dynamically */
+      {
+        glGenBuffers(1, &jeux.gl.text.buf_vtx);
+        glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.text.buf_vtx);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(jeux.gl.text.vtx), NULL, GL_DYNAMIC_DRAW);
+      }
 
-       size_t i = lr->data_start;
-       for (int pixel_y = 0; pixel_y < lr->size_y; pixel_y++)
-         for (int pixel_x = 0; pixel_x < lr->size_x; pixel_x++) {
-           size_t x = lr->x + pixel_x;
-           size_t y = lr->y + pixel_y;
-           data[font_TEX_SIZE_X*y + x] = font_tex_bytes[i++];
-         }
-     }
+      {
+        glGenBuffers(1, &jeux.gl.text.buf_idx);
+        glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.text.buf_idx);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(jeux.gl.text.idx), NULL, GL_DYNAMIC_DRAW);
+      }
 
-     glTexImage2D(
-       /* GLenum  target         */ GL_TEXTURE_2D,
-       /* GLint   level          */ 0,
-       /* GLint   internalFormat */ GL_R8,
-       /* GLsizei width          */ font_TEX_SIZE_X,
-       /* GLsizei height         */ font_TEX_SIZE_Y,
-       /* GLint   border         */ 0,
-       /* GLenum  format         */ GL_RED,
-       /* GLenum  type           */ GL_UNSIGNED_BYTE,
-       /* const void *data       */ data
-     );
+      jeux.gl.text.shader_u_buffer   = glGetUniformLocation(jeux.gl.text.shader, "u_buffer"  );
+      jeux.gl.text.shader_u_gamma    = glGetUniformLocation(jeux.gl.text.shader, "u_gamma"   );
+      jeux.gl.text.shader_u_tex_size = glGetUniformLocation(jeux.gl.text.shader, "u_tex_size");
+      jeux.gl.text.shader_u_win_size = glGetUniformLocation(jeux.gl.text.shader, "u_win_size");
+      jeux.gl.text.shader_a_pos      = glGetAttribLocation( jeux.gl.text.shader, "a_pos"     );
+      jeux.gl.text.shader_a_uv       = glGetAttribLocation( jeux.gl.text.shader, "a_uv"      );
+      jeux.gl.text.shader_a_size     = glGetAttribLocation( jeux.gl.text.shader, "a_size"    );
+    }
+
+    /* create texture - writes to jeux.gl.tex */
+    {
+       glGenTextures(1, &jeux.gl.text.tex);
+       glBindTexture(GL_TEXTURE_2D, jeux.gl.text.tex);
+       glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+       glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+       glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+       glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+       uint8_t data[font_TEX_SIZE_X * font_TEX_SIZE_Y * 4] = {0};
+       for (int letter_idx = 0; letter_idx < jx_COUNT(font_letter_regions); letter_idx++) {
+         font_LetterRegion *lr = font_letter_regions + letter_idx;
+
+         size_t i = lr->data_start;
+         for (int pixel_y = 0; pixel_y < lr->size_y; pixel_y++)
+           for (int pixel_x = 0; pixel_x < lr->size_x; pixel_x++) {
+             size_t x = lr->x + pixel_x;
+             size_t y = lr->y + pixel_y;
+             data[font_TEX_SIZE_X*y + x] = font_tex_bytes[i++];
+           }
+       }
+
+       glTexImage2D(
+         /* GLenum  target         */ GL_TEXTURE_2D,
+         /* GLint   level          */ 0,
+         /* GLint   internalFormat */ GL_R8,
+         /* GLsizei width          */ font_TEX_SIZE_X,
+         /* GLsizei height         */ font_TEX_SIZE_Y,
+         /* GLint   border         */ 0,
+         /* GLenum  format         */ GL_RED,
+         /* GLenum  type           */ GL_UNSIGNED_BYTE,
+         /* const void *data       */ data
+       );
+    }
   }
 
   return SDL_APP_CONTINUE;
@@ -614,4 +535,153 @@ static void gl_resize(void) {
       SDL_Log("couldn't make render buffer: n%xn", status);
     }
   }
+}
+
+static void gl_text_reset(void) {
+  jeux.gl.text.vtx_wtr = jeux.gl.text.vtx;
+  jeux.gl.text.idx_wtr = jeux.gl.text.idx;
+}
+
+static void gl_text_draw(const char *msg, float screen_x, float screen_y, float size) {
+  gl_text_Vtx *vtx_wtr = jeux.gl.text.vtx_wtr;
+  gl_text_Tri *idx_wtr = jeux.gl.text.idx_wtr;
+
+  size *= SDL_GetWindowPixelDensity(jeux.sdl.window);
+  float scale = (size / font_BASE_CHAR_SIZE);
+
+  float pen_x = screen_x;
+  float pen_y = screen_y;
+  do {
+    font_LetterRegion *l = &font_letter_regions[(size_t)(*msg)];
+
+    uint16_t start = vtx_wtr - jeux.gl.text.vtx;
+
+    float x = pen_x;
+    float y = pen_y + l->top * scale;
+    float size_x = l->size_x * scale;
+    float size_y = l->size_y * scale;
+    *vtx_wtr++ = (gl_text_Vtx) { x + size_x,  y - size_y, l->x + l->size_x, l->y + l->size_y, size };
+    *vtx_wtr++ = (gl_text_Vtx) { x + size_x,  y         , l->x + l->size_x, l->y            , size };
+    *vtx_wtr++ = (gl_text_Vtx) { x         ,  y         , l->x            , l->y            , size };
+    *vtx_wtr++ = (gl_text_Vtx) { x         ,  y - size_y, l->x            , l->y + l->size_y, size };
+
+    *idx_wtr++ = (gl_text_Tri) { start + 0, start + 1, start + 2 };
+    *idx_wtr++ = (gl_text_Tri) { start + 2, start + 3, start + 0 };
+
+    pen_x += l->advance * scale;
+  } while (*msg++);
+
+  jeux.gl.text.vtx_wtr = vtx_wtr;
+  jeux.gl.text.idx_wtr = idx_wtr;
+}
+
+SDL_AppResult SDL_AppIterate(void *appstate) {
+  // uint64_t ts_now = SDL_GetPerformanceCounter();
+  // double delta_time = (double)(ts_now - jeux.ts_last_frame) / (double)SDL_GetPerformanceFrequency();
+  // jeux.ts_last_frame = ts_now;
+
+  // double elapsed = (double)(ts_now - jeux.ts_first) / (double)SDL_GetPerformanceFrequency();
+
+  gl_text_reset();
+
+  gl_text_draw(
+    "hi! i'm ced?",
+    jeux.window_size_x * 0.5,
+    jeux.window_size_y * 0.5,
+    24.0f
+  );
+
+  /* render */
+  {
+
+    {
+      /* switch to the fb that gets postprocessing applied later */
+      glViewport(0, 0, jeux.window_size_x*jeux.gl.fb_scale, jeux.window_size_y*jeux.gl.fb_scale);
+      glBindFramebuffer(GL_FRAMEBUFFER, jeux.gl.screen.pp_fb);
+
+      /* clear color */
+      glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
+      glClear(GL_COLOR_BUFFER_BIT);
+
+      glUseProgram(jeux.gl.shader.geo);
+
+      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo_vtx);
+      glEnableVertexAttribArray(jeux.gl.shader.geo_a_pos);
+      glVertexAttribPointer(jeux.gl.shader.geo_a_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
+
+      glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+
+    /* stop writing to the framebuffer, start writing to the screen */
+    glViewport(0, 0, jeux.window_size_x, jeux.window_size_y);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    /* draw the contents of the framebuffer with postprocessing/aa applied */
+    {
+      glUseProgram(jeux.gl.shader.pp);
+      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.fullscreen_vtx);
+      glEnableVertexAttribArray(jeux.gl.shader.pp_a_pos);
+      glVertexAttribPointer(jeux.gl.shader.pp_a_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
+
+      glBindTexture(GL_TEXTURE_2D, jeux.gl.screen.pp_tex);
+      glUniform2f(jeux.gl.shader.pp_u_win_size, jeux.window_size_x, jeux.window_size_y);
+      glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+
+    /* draw text (after pp because it has its own AA) */
+    {
+      glUseProgram(jeux.gl.text.shader);
+
+      /* update VBO contents */
+      {
+        gl_text_Vtx *vtx = jeux.gl.text.vtx;
+        gl_text_Tri *idx = jeux.gl.text.idx;
+
+        {
+          glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.text.buf_vtx);
+          size_t len = jeux.gl.text.vtx_wtr - vtx;
+          glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vtx[0]) * len, vtx);
+        }
+
+        {
+          glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, jeux.gl.text.buf_idx);
+          size_t len = jeux.gl.text.idx_wtr - idx;
+          glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, sizeof(idx[0]) * len, idx);
+        }
+      }
+
+      {
+        size_t size = sizeof(gl_text_Vtx);
+        size_t pos_offset = 0;
+
+        glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.text.buf_vtx);
+        glEnableVertexAttribArray(jeux.gl.text.shader_a_pos);
+        glVertexAttribPointer(jeux.gl.text.shader_a_pos, 2, GL_FLOAT, GL_FALSE, size, (void *)offsetof(gl_text_Vtx, x));
+
+        glEnableVertexAttribArray(jeux.gl.text.shader_a_uv);
+        glVertexAttribPointer(jeux.gl.text.shader_a_uv, 2, GL_FLOAT, GL_FALSE, size, (void *)offsetof(gl_text_Vtx, u));
+
+        glEnableVertexAttribArray(jeux.gl.text.shader_a_size);
+        glVertexAttribPointer(jeux.gl.text.shader_a_size, 1, GL_FLOAT, GL_FALSE, size, (void *)offsetof(gl_text_Vtx, size));
+      }
+
+      glBindTexture(GL_TEXTURE_2D, jeux.gl.text.tex);
+      glUniform2f(jeux.gl.text.shader_u_tex_size, font_TEX_SIZE_X, font_TEX_SIZE_Y);
+      glUniform2f(jeux.gl.text.shader_u_win_size, jeux.window_size_x, jeux.window_size_y);
+      glUniform1f(jeux.gl.text.shader_u_buffer, 0.725);
+
+      /* set up premultiplied alpha */
+      glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+      glEnable(GL_BLEND);
+
+      float gamma = 2.0;
+      glUniform1f(jeux.gl.text.shader_u_gamma, gamma * 1.4142);
+      glDrawElements(GL_TRIANGLES, 3 * (jeux.gl.text.idx_wtr - jeux.gl.text.idx), GL_UNSIGNED_SHORT, 0);
+
+      glDisable(GL_BLEND);
+    }
+  }
+
+  SDL_GL_SwapWindow(jeux.sdl.window);
+  return SDL_APP_CONTINUE;
 }
