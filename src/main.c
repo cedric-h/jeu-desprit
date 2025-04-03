@@ -71,7 +71,7 @@ static struct {
     .fb_scale = 1.0f,
 #endif
 
-    .text_scale = 3.0f,
+    .text_scale = 1.0f,
   }
 };
 
@@ -171,7 +171,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       glBindTexture(GL_TEXTURE_2D, jeux.gl.text_tex);
       glUniform2f(jeux.gl.shader.text_u_tex_size, font_TEX_SIZE_X, font_TEX_SIZE_Y);
       glUniform2f(jeux.gl.shader.text_u_win_size, jeux.window_size_x, jeux.window_size_y);
-      glUniform1f(jeux.gl.shader.text_u_buffer, 0.65);
+      glUniform1f(jeux.gl.shader.text_u_buffer, 0.7);
 
       /* set up premultiplied alpha */
       glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE);
