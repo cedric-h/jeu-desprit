@@ -182,6 +182,7 @@ static struct {
       GLuint buf_idx;
       GLuint shader;
       GLint shader_a_pos;
+      GLint shader_u_mvp;
     } geo;
 
     struct {
@@ -316,9 +317,10 @@ static SDL_AppResult gl_init(void) {
         .debug_name = "geo",
         .vs =
           "attribute vec4 a_pos;\n"
+          "uniform mat4 u_mvp;\n"
           "varying vec3 v_color;\n"
           "void main() {\n"
-          "  gl_Position = vec4(a_pos.xyz, 1.0);\n"
+          "  gl_Position = u_mvp * vec4(a_pos.xyz, 1.0);\n"
           "  v_color = vec3(0);\n"
           "}\n"
         ,
@@ -570,7 +572,8 @@ static SDL_AppResult gl_init(void) {
     glBufferData(GL_ARRAY_BUFFER, sizeof(jeux.gl.geo.idx), NULL, GL_DYNAMIC_DRAW);
 
     /* shader data layout */
-    jeux.gl.geo.shader_a_pos = glGetAttribLocation(jeux.gl.geo.shader, "a_pos");
+    jeux.gl.geo.shader_u_mvp = glGetUniformLocation(jeux.gl.geo.shader, "u_mvp");
+    jeux.gl.geo.shader_a_pos = glGetAttribLocation (jeux.gl.geo.shader, "a_pos");
   }
 
   gl_resize();
@@ -734,38 +737,11 @@ static void gl_geo_reset(void) {
   jeux.gl.geo.idx_wtr = jeux.gl.geo.idx;
 }
 
-static gl_geo_Vtx gl_geo_vtx_transform(gl_geo_Vtx v) {
-  f4 p = { .p = { v.x, v.y, v.z, 1.0f } };
-
-  float ar = (float)(jeux.window_size_y) / (float)(jeux.window_size_x);
-  f4x4 cam = f4x4_ortho(
-     -2.0f     ,  2.0f     ,
-     -2.0f * ar,  2.0f * ar,
-    -20.0f     , 20.0f    
-  );
-
-  float x = cosf(jeux.elapsed * 0.5f);
-  float y = sinf(jeux.elapsed * 0.5f);
-  f4x4 orbit = f4x4_target_to(
-    (f3) {    x,    y, 0.8f },
-    (f3) { 0.0f, 0.0f, 0.0f },
-    (f3) { 0.0f, 0.0f, 1.0f }
-  );
-  cam = f4x4_mulf4x4(cam, f4x4_invert(orbit));
-
-  p = f4x4_mul_f4(cam, p);
-
-  v.x = p.p.x;
-  v.y = p.p.y;
-  v.z = p.p.z;
-
-  return v;
-}
 static void gl_geo_line(f2 from, f2 to, float thickness) {
-  *jeux.gl.geo.vtx_wtr++ = gl_geo_vtx_transform((gl_geo_Vtx) {  0.5f,  0.5f, 0.0f });
-  *jeux.gl.geo.vtx_wtr++ = gl_geo_vtx_transform((gl_geo_Vtx) {  0.5f, -0.5f, 0.0f });
-  *jeux.gl.geo.vtx_wtr++ = gl_geo_vtx_transform((gl_geo_Vtx) { -0.5f, -0.5f, 0.0f });
-  *jeux.gl.geo.vtx_wtr++ = gl_geo_vtx_transform((gl_geo_Vtx) { -0.5f,  0.5f, 0.0f });
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) {  0.5f,  0.5f, 0.0f };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) {  0.5f, -0.5f, 0.0f };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { -0.5f, -0.5f, 0.0f };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { -0.5f,  0.5f, 0.0f };
 
   *jeux.gl.geo.idx_wtr++ = (gl_Tri) { 0, 1, 2 };
   *jeux.gl.geo.idx_wtr++ = (gl_Tri) { 2, 3, 0 };
@@ -828,6 +804,26 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
         glEnableVertexAttribArray(jeux.gl.geo.shader_a_pos);
         glVertexAttribPointer(jeux.gl.geo.shader_a_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
+
+        f4x4 mvp = {0};
+        {
+          float ar = (float)(jeux.window_size_y) / (float)(jeux.window_size_x);
+          f4x4 cam = f4x4_ortho(
+             -2.0f     ,  2.0f     ,
+             -2.0f * ar,  2.0f * ar,
+            -20.0f     , 20.0f
+          );
+
+          float x = cosf(jeux.elapsed * 0.5f);
+          float y = sinf(jeux.elapsed * 0.5f);
+          f4x4 orbit = f4x4_target_to(
+            (f3) {    x,    y, 0.8f },
+            (f3) { 0.0f, 0.0f, 0.0f },
+            (f3) { 0.0f, 0.0f, 1.0f }
+          );
+          mvp = f4x4_mulf4x4(cam, f4x4_invert(orbit));
+        }
+        glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, mvp.floats);
 
         glDrawElements(GL_TRIANGLES, 3*(jeux.gl.geo.idx_wtr - jeux.gl.geo.idx), GL_UNSIGNED_SHORT, 0);
       }
