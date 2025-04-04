@@ -1,6 +1,8 @@
 // vim: sw=2 ts=2 expandtab smartindent
 
 #include <stdlib.h>
+#include <stddef.h>
+#include <math.h>
 
 #include <SDL3/SDL.h>
 #define SDL_MAIN_USE_CALLBACKS
@@ -10,6 +12,142 @@
 #include "font.h"
 
 #define jx_COUNT(arr) (sizeof(arr) / sizeof((arr)[0]))
+typedef struct { float x, y; } f2;
+typedef struct { float x, y, z; } f3;
+typedef union { float arr[4]; struct { float x, y, z, w; } p; } f4;
+typedef union { float arr[4][4]; f4 rows[4]; float floats[16]; } f4x4;
+static f4x4 f4x4_ortho(float left, float right, float bottom, float top, float near, float far) {
+    f4x4 res = {0};
+
+    res.arr[0][0] = 2.0f / (right - left);
+    res.arr[1][1] = 2.0f / (top - bottom);
+    res.arr[2][2] = 2.0f / (near - far);
+    res.arr[3][3] = 1.0f;
+
+    res.arr[3][0] = (left + right) / (left - right);
+    res.arr[3][1] = (bottom + top) / (bottom - top);
+    res.arr[3][2] = (far + near) / (near - far);
+
+    return res;
+}
+
+static f4x4 f4x4_target_to(f3 eye, f3 target, f3 up) {
+  float z0 = eye.x - target.x,
+        z1 = eye.y - target.y,
+        z2 = eye.z - target.z;
+  float len = z0 * z0 + z1 * z1 + z2 * z2;
+  if (len > 0) {
+      len = 1.0f / sqrtf(len);
+      z0 *= len;
+      z1 *= len;
+      z2 *= len;
+  }
+  float x0 = up.y * z2 - up.z * z1,
+        x1 = up.z * z0 - up.x * z2,
+        x2 = up.x * z1 - up.y * z0;
+  len = x0 * x0 + x1 * x1 + x2 * x2;
+  if (len > 0) {
+      len = 1 / sqrtf(len);
+      x0 *= len;
+      x1 *= len;
+      x2 *= len;
+  }
+
+  return (f4x4) { .arr = {
+    { x0, x1, x2, 0 },
+    {
+      z1 * x2 - z2 * x1,
+      z2 * x0 - z0 * x2,
+      z0 * x1 - z1 * x0,
+      0,
+    },
+    { z0, z1, z2, 0 },
+    { eye.x, eye.y, eye.z, 1 },
+  } };
+}
+
+static f4x4 f4x4_invert(f4x4 a) {
+    float b00 = a.arr[0][0] * a.arr[1][1] - a.arr[0][1] * a.arr[1][0];
+    float b01 = a.arr[0][0] * a.arr[1][2] - a.arr[0][2] * a.arr[1][0];
+    float b02 = a.arr[0][0] * a.arr[1][3] - a.arr[0][3] * a.arr[1][0];
+    float b03 = a.arr[0][1] * a.arr[1][2] - a.arr[0][2] * a.arr[1][1];
+    float b04 = a.arr[0][1] * a.arr[1][3] - a.arr[0][3] * a.arr[1][1];
+    float b05 = a.arr[0][2] * a.arr[1][3] - a.arr[0][3] * a.arr[1][2];
+    float b06 = a.arr[2][0] * a.arr[3][1] - a.arr[2][1] * a.arr[3][0];
+    float b07 = a.arr[2][0] * a.arr[3][2] - a.arr[2][2] * a.arr[3][0];
+    float b08 = a.arr[2][0] * a.arr[3][3] - a.arr[2][3] * a.arr[3][0];
+    float b09 = a.arr[2][1] * a.arr[3][2] - a.arr[2][2] * a.arr[3][1];
+    float b10 = a.arr[2][1] * a.arr[3][3] - a.arr[2][3] * a.arr[3][1];
+    float b11 = a.arr[2][2] * a.arr[3][3] - a.arr[2][3] * a.arr[3][2];
+
+    /* Calculate the determinant */
+    float det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+    if (det == 0.0f) {
+      SDL_Log("Couldn't invert matrix!\n");
+      return (f4x4) {0};
+    }
+
+    det = 1.0 / det;
+    return (f4x4) { .floats = {
+      (a.arr[1][1] * b11 - a.arr[1][2] * b10 + a.arr[1][3] * b09) * det,
+      (a.arr[0][2] * b10 - a.arr[0][1] * b11 - a.arr[0][3] * b09) * det,
+      (a.arr[3][1] * b05 - a.arr[3][2] * b04 + a.arr[3][3] * b03) * det,
+      (a.arr[2][2] * b04 - a.arr[2][1] * b05 - a.arr[2][3] * b03) * det,
+      (a.arr[1][2] * b08 - a.arr[1][0] * b11 - a.arr[1][3] * b07) * det,
+      (a.arr[0][0] * b11 - a.arr[0][2] * b08 + a.arr[0][3] * b07) * det,
+      (a.arr[3][2] * b02 - a.arr[3][0] * b05 - a.arr[3][3] * b01) * det,
+      (a.arr[2][0] * b05 - a.arr[2][2] * b02 + a.arr[2][3] * b01) * det,
+      (a.arr[1][0] * b10 - a.arr[1][1] * b08 + a.arr[1][3] * b06) * det,
+      (a.arr[0][1] * b08 - a.arr[0][0] * b10 - a.arr[0][3] * b06) * det,
+      (a.arr[3][0] * b04 - a.arr[3][1] * b02 + a.arr[3][3] * b00) * det,
+      (a.arr[2][1] * b02 - a.arr[2][0] * b04 - a.arr[2][3] * b00) * det,
+      (a.arr[1][1] * b07 - a.arr[1][0] * b09 - a.arr[1][2] * b06) * det,
+      (a.arr[0][0] * b09 - a.arr[0][1] * b07 + a.arr[0][2] * b06) * det,
+      (a.arr[3][1] * b01 - a.arr[3][0] * b03 - a.arr[3][2] * b00) * det,
+      (a.arr[2][0] * b03 - a.arr[2][1] * b01 + a.arr[2][2] * b00) * det,
+    } };
+}
+
+static f4x4 f4x4_mulf4x4(f4x4 a, f4x4 b) {
+  f4x4 out = {0};
+
+  /* cache only the current line of the second matrix */
+  f4 bb = b.rows[0];
+  out.arr[0][0] = bb.arr[0] * a.arr[0][0] + bb.arr[1] * a.arr[1][0] + bb.arr[2] * a.arr[2][0] + bb.arr[3] * a.arr[3][0];
+  out.arr[0][1] = bb.arr[0] * a.arr[0][1] + bb.arr[1] * a.arr[1][1] + bb.arr[2] * a.arr[2][1] + bb.arr[3] * a.arr[3][1];
+  out.arr[0][2] = bb.arr[0] * a.arr[0][2] + bb.arr[1] * a.arr[1][2] + bb.arr[2] * a.arr[2][2] + bb.arr[3] * a.arr[3][2];
+  out.arr[0][3] = bb.arr[0] * a.arr[0][3] + bb.arr[1] * a.arr[1][3] + bb.arr[2] * a.arr[2][3] + bb.arr[3] * a.arr[3][3];
+  bb = b.rows[1];
+  out.arr[1][0] = bb.arr[0] * a.arr[0][0] + bb.arr[1] * a.arr[1][0] + bb.arr[2] * a.arr[2][0] + bb.arr[3] * a.arr[3][0];
+  out.arr[1][1] = bb.arr[0] * a.arr[0][1] + bb.arr[1] * a.arr[1][1] + bb.arr[2] * a.arr[2][1] + bb.arr[3] * a.arr[3][1];
+  out.arr[1][2] = bb.arr[0] * a.arr[0][2] + bb.arr[1] * a.arr[1][2] + bb.arr[2] * a.arr[2][2] + bb.arr[3] * a.arr[3][2];
+  out.arr[1][3] = bb.arr[0] * a.arr[0][3] + bb.arr[1] * a.arr[1][3] + bb.arr[2] * a.arr[2][3] + bb.arr[3] * a.arr[3][3];
+  bb = b.rows[2];
+  out.arr[2][0] = bb.arr[0] * a.arr[0][0] + bb.arr[1] * a.arr[1][0] + bb.arr[2] * a.arr[2][0] + bb.arr[3] * a.arr[3][0];
+  out.arr[2][1] = bb.arr[0] * a.arr[0][1] + bb.arr[1] * a.arr[1][1] + bb.arr[2] * a.arr[2][1] + bb.arr[3] * a.arr[3][1];
+  out.arr[2][2] = bb.arr[0] * a.arr[0][2] + bb.arr[1] * a.arr[1][2] + bb.arr[2] * a.arr[2][2] + bb.arr[3] * a.arr[3][2];
+  out.arr[2][3] = bb.arr[0] * a.arr[0][3] + bb.arr[1] * a.arr[1][3] + bb.arr[2] * a.arr[2][3] + bb.arr[3] * a.arr[3][3];
+  bb = b.rows[3];
+  out.arr[3][0] = bb.arr[0] * a.arr[0][0] + bb.arr[1] * a.arr[1][0] + bb.arr[2] * a.arr[2][0] + bb.arr[3] * a.arr[3][0];
+  out.arr[3][1] = bb.arr[0] * a.arr[0][1] + bb.arr[1] * a.arr[1][1] + bb.arr[2] * a.arr[2][1] + bb.arr[3] * a.arr[3][1];
+  out.arr[3][2] = bb.arr[0] * a.arr[0][2] + bb.arr[1] * a.arr[1][2] + bb.arr[2] * a.arr[2][2] + bb.arr[3] * a.arr[3][2];
+  out.arr[3][3] = bb.arr[0] * a.arr[0][3] + bb.arr[1] * a.arr[1][3] + bb.arr[2] * a.arr[2][3] + bb.arr[3] * a.arr[3][3];
+
+  return out;
+}
+
+static f4 f4x4_mul_f4(f4x4 m, f4 v) {
+    f4 res;
+    for (int x = 0; x < 4; x++) {
+        float sum = 0;
+        for (int y = 0; y < 4; y++)
+            sum += m.arr[y][x] * v.arr[y];
+
+        res.arr[x] = sum;
+    }
+    return res;
+}
+
 
 #define ANTIALIAS_NONE    0
 #define ANTIALIAS_LINEAR  1
@@ -19,7 +157,8 @@
 #define CURRENT_ALIASING ANTIALIAS_4xSSAA
 
 typedef struct { float x, y, u, v, size; } gl_text_Vtx;
-typedef struct { uint16_t a, b, c; } gl_text_Tri;
+typedef struct { float x, y, z; } gl_geo_Vtx;
+typedef struct { uint16_t a, b, c; } gl_Tri;
 
 static struct {
   struct {
@@ -29,25 +168,45 @@ static struct {
 
   size_t window_size_x, window_size_y;
   uint64_t ts_last_frame, ts_first;
+  double elapsed;
 
   struct {
     struct {
-      GLuint pp; /* postprocessing */
-      GLint pp_u_win_size;
-      GLint pp_a_pos;
+      gl_geo_Vtx vtx[999];
+      gl_geo_Vtx *vtx_wtr;
 
-      GLuint geo;
-      GLint geo_a_pos;
-    } shader;
-    GLuint fullscreen_vtx;
-    GLuint geo_vtx;
+      gl_Tri idx[999];
+      gl_Tri *idx_wtr;
+
+      GLuint buf_vtx;
+      GLuint buf_idx;
+      GLuint shader;
+      GLint shader_a_pos;
+    } geo;
+
+    struct {
+      float fb_scale;
+
+      GLuint buf_vtx;
+
+      GLuint shader; /* postprocessing */
+      GLint shader_u_win_size;
+      GLint shader_a_pos;
+
+      /* resources inside here need to be recreated
+       * when the application window is resized. */
+      struct {
+        /* postprocessing framebuffer (anti-aliasing and other fx) */
+        GLuint pp_tex, pp_fb;
+      } screen;
+    } pp;
 
     struct {
       gl_text_Vtx vtx[999];
       gl_text_Vtx *vtx_wtr;
 
-      gl_text_Tri idx[999];
-      gl_text_Tri *idx_wtr;
+      gl_Tri idx[999];
+      gl_Tri *idx_wtr;
 
       GLuint buf_vtx;
       GLuint buf_idx;
@@ -64,19 +223,11 @@ static struct {
       GLint shader_a_size;
     } text;
 
-    float fb_scale;
-
-    /* resources inside here need to be recreated
-     * when the application window is resized. */
-    struct {
-      /* postprocessing framebuffer (anti-aliasing and other fx) */
-      GLuint pp_tex, pp_fb;
-    } screen;
   } gl;
 } jeux = {
   .window_size_x = 800,
   .window_size_y = 450,
-  .gl = {
+  .gl.pp = {
 #if   CURRENT_ALIASING == ANTIALIAS_4xSSAA
     .fb_scale = 4.0f,
 #elif CURRENT_ALIASING == ANTIALIAS_2xSSAA
@@ -160,23 +311,24 @@ static SDL_AppResult gl_init(void) {
       const GLchar *vs, *fs;
     } shaders[] = {
       {
-        .dst = &jeux.gl.shader.geo,
+        /* MARK: geo shader definition */
+        .dst = &jeux.gl.geo.shader,
         .debug_name = "geo",
         .vs =
-          "attribute vec4 a_pos;                      \n"
-          "varying vec3 v_color;                      \n"
-          "void main() {                              \n"
-          "  gl_Position = vec4(a_pos.xyz, 1.0);      \n"
-          "  v_color = gl_Position.xyz + vec3(0.5);   \n"
-          "}                                          \n"
+          "attribute vec4 a_pos;\n"
+          "varying vec3 v_color;\n"
+          "void main() {\n"
+          "  gl_Position = vec4(a_pos.xyz, 1.0);\n"
+          "  v_color = vec3(0);\n"
+          "}\n"
         ,
         .fs =
-          "precision mediump float;               \n"
-          "varying vec3 v_color;                  \n"
-          "uniform sampler2D u_tex;               \n"
-          "void main() {                          \n"
-          "  gl_FragColor = vec4(v_color, 1.0);   \n"
-          "}                                      \n"
+          "precision mediump float;\n"
+          "varying vec3 v_color;\n"
+          "uniform sampler2D u_tex;\n"
+          "void main() {\n"
+          "  gl_FragColor = vec4(v_color, 1.0);\n"
+          "}\n"
       },
       {
         .dst = &jeux.gl.text.shader,
@@ -216,48 +368,50 @@ static SDL_AppResult gl_init(void) {
           "}\n"
       },
       {
-        .dst = &jeux.gl.shader.pp,
+        .dst = &jeux.gl.pp.shader,
         .debug_name = "pp",
         .vs =
-          "attribute vec4 a_pos;                         \n"
-          "varying vec2 v_uv;                            \n"
-          "void main() {                                 \n"
-          "  gl_Position = vec4(a_pos.xyz, 1.0);         \n"
-          "  v_uv = gl_Position.xy*0.5 + vec2(0.5);      \n"
-          "}                                             \n"
+          "attribute vec4 a_pos;\n"
+          "varying vec2 v_uv;\n"
+          "void main() {\n"
+          "  gl_Position = vec4(a_pos.xyz, 1.0);\n"
+          "  v_uv = gl_Position.xy*0.5 + vec2(0.5);\n"
+          "}\n"
         ,
         .fs =
 
 // No AA
 #if CURRENT_ALIASING == ANTIALIAS_NONE || CURRENT_ALIASING == ANTIALIAS_LINEAR
-          "precision mediump float;                                                                \n"
-          "varying vec2 v_uv;                                                                      \n"
-          "uniform sampler2D u_tex;                                                                \n"
-          "uniform vec2 u_win_size;                                                                \n"
-          "void main() {                                                                           \n"
+          "precision mediump float;\n"
+          "varying vec2 v_uv;\n"
+          "uniform sampler2D u_tex;\n"
+          "uniform vec2 u_win_size;\n"
+          "void main() {\n"
           "  gl_FragColor = texture2D(u_tex, v_uv);\n"
-          "}                                                                                       \n"
+          "  gl_FragColor = vec4(pow(abs(gl_FragColor.xyz), vec3(1.0 / 2.2)), 1);\n"
+          "}\n"
 #elif CURRENT_ALIASING == ANTIALIAS_2xSSAA
-          "precision mediump float;                                                                \n"
-          "varying vec2 v_uv;                                                                      \n"
-          "uniform sampler2D u_tex;                                                                \n"
-          "uniform vec2 u_win_size;                                                                \n"
-          "void main() {                                                                           \n"
+          "precision mediump float;\n"
+          "varying vec2 v_uv;\n"
+          "uniform sampler2D u_tex;\n"
+          "uniform vec2 u_win_size;\n"
+          "void main() {\n"
           "  vec2 inv_vp = 1.0 / u_win_size;\n"
           "  gl_FragColor = vec4(0, 0, 0, 1);\n"
           "  gl_FragColor.xyz += 0.25*texture2D(u_tex, v_uv + (vec2(-0.25, -0.25) * inv_vp)).xyz;\n"
           "  gl_FragColor.xyz += 0.25*texture2D(u_tex, v_uv + (vec2(+0.25, -0.25) * inv_vp)).xyz;\n"
           "  gl_FragColor.xyz += 0.25*texture2D(u_tex, v_uv + (vec2(-0.25, +0.25) * inv_vp)).xyz;\n"
           "  gl_FragColor.xyz += 0.25*texture2D(u_tex, v_uv + (vec2(+0.25, +0.25) * inv_vp)).xyz;\n"
+          "  gl_FragColor = vec4(pow(abs(gl_FragColor.xyz), vec3(1.0 / 2.2)), 1);\n"
           "}\n"
 #elif CURRENT_ALIASING == ANTIALIAS_4xSSAA
-          "precision mediump float;                                                                  \n"
-          "varying vec2 v_uv;                                                                        \n"
-          "uniform sampler2D u_tex;                                                                  \n"
-          "uniform vec2 u_win_size;                                                                  \n"
-          "void main() {                                                                             \n"
-          "  vec2 inv_vp = 1.0 / u_win_size;                                                         \n"
-          "  gl_FragColor = vec4(0, 0, 0, 1);                                                        \n"
+          "precision mediump float;\n"
+          "varying vec2 v_uv;\n"
+          "uniform sampler2D u_tex;\n"
+          "uniform vec2 u_win_size;\n"
+          "void main() {\n"
+          "  vec2 inv_vp = 1.0 / u_win_size;\n"
+          "  gl_FragColor = vec4(0, 0, 0, 1);\n"
           "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2(-0.375, -0.375) * inv_vp)).xyz;\n"
           "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2(-0.375, -0.125) * inv_vp)).xyz;\n"
           "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2(-0.375,  0.125) * inv_vp)).xyz;\n"
@@ -274,70 +428,71 @@ static SDL_AppResult gl_init(void) {
           "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2( 0.375, -0.125) * inv_vp)).xyz;\n"
           "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2( 0.375,  0.125) * inv_vp)).xyz;\n"
           "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2( 0.375,  0.375) * inv_vp)).xyz;\n"
+          "  gl_FragColor = vec4(pow(abs(gl_FragColor.xyz), vec3(1.0 / 2.2)), 1);\n"
           "}\n"
 #elif CURRENT_ALIASING == ANTIALIAS_FXAA
 
           /* TODO: fix this https://github.com/LiveMirror/NVIDIA-Direct3D-SDK-11/blob/a2d3cc46179364c9faa3e218eff230883badcd79/FXAA/FxaaShader.h#L1 */
 
-          "precision mediump float;                                                                \n"
-          "varying vec2 v_uv;                                                                      \n"
-          "uniform sampler2D u_tex;                                                                \n"
-          "uniform vec2 u_win_size;                                                                \n"
-          "void main() {                                                                           \n"
-            "float FXAA_SPAN_MAX = 8.0;                                                            \n"
-            "float FXAA_REDUCE_MUL = 1.0/8.0;                                                      \n"
-            "float FXAA_REDUCE_MIN = (1.0/128.0);                                                  \n"
+          "precision mediump float;\n"
+          "varying vec2 v_uv;\n"
+          "uniform sampler2D u_tex;\n"
+          "uniform vec2 u_win_size;\n"
+          "void main() {\n"
+            "float FXAA_SPAN_MAX = 8.0;\n"
+            "float FXAA_REDUCE_MUL = 1.0/8.0;\n"
+            "float FXAA_REDUCE_MIN = (1.0/128.0);\n"
 
             "vec2 inv_vp = 1.0 / u_win_size;\n"
             "vec3 rgbNW = texture2D(u_tex, v_uv + (vec2(-0.5, -0.5) * inv_vp)).xyz;\n"
             "vec3 rgbNE = texture2D(u_tex, v_uv + (vec2(+0.5, -0.5) * inv_vp)).xyz;\n"
             "vec3 rgbSW = texture2D(u_tex, v_uv + (vec2(-0.5, +0.5) * inv_vp)).xyz;\n"
             "vec3 rgbSE = texture2D(u_tex, v_uv + (vec2(+0.5, +0.5) * inv_vp)).xyz;\n"
-            "vec3 rgbM  = texture2D(u_tex, v_uv).xyz;                                 \n"
+            "vec3 rgbM  = texture2D(u_tex, v_uv).xyz;\n"
 
-            "vec3 luma = vec3(0.299, 0.587, 0.114);                                                \n"
-            "float lumaNW = dot(rgbNW, luma);                                                      \n"
-            "float lumaNE = dot(rgbNE, luma);                                                      \n"
-            "float lumaSW = dot(rgbSW, luma);                                                      \n"
-            "float lumaSE = dot(rgbSE, luma);                                                      \n"
-            "float lumaM  = dot( rgbM, luma);                                                      \n"
+            "vec3 luma = vec3(0.299, 0.587, 0.114);\n"
+            "float lumaNW = dot(rgbNW, luma);\n"
+            "float lumaNE = dot(rgbNE, luma);\n"
+            "float lumaSW = dot(rgbSW, luma);\n"
+            "float lumaSE = dot(rgbSE, luma);\n"
+            "float lumaM  = dot( rgbM, luma);\n"
           
-            "float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));            \n"
-            "float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));            \n"
+            "float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));\n"
+            "float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));\n"
           
-            "vec2 dir;                                                                             \n"
-            "dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));                                     \n"
-            "dir.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));                                     \n"
+            "vec2 dir;\n"
+            "dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));\n"
+            "dir.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));\n"
           
-            "float dirReduce = max(                                                                \n"
-            "  (lumaNW + lumaNE + lumaSW + lumaSE) * (0.25 * FXAA_REDUCE_MUL),                     \n"
-            "  FXAA_REDUCE_MIN                                                                     \n"
-            ");                                                                                    \n"
+            "float dirReduce = max(\n"
+            "  (lumaNW + lumaNE + lumaSW + lumaSE) * (0.25 * FXAA_REDUCE_MUL),\n"
+            "  FXAA_REDUCE_MIN\n"
+            ");\n"
 
-            "float rcpDirMin = 1.0/(min(abs(dir.x), abs(dir.y)) + dirReduce);                      \n"
+            "float rcpDirMin = 1.0/(min(abs(dir.x), abs(dir.y)) + dirReduce);\n"
           
             "dir = min(\n"
-            "  vec2(FXAA_SPAN_MAX,  FXAA_SPAN_MAX),                                        \n"
+            "  vec2(FXAA_SPAN_MAX,  FXAA_SPAN_MAX),\n"
             "  max(vec2(-FXAA_SPAN_MAX, -FXAA_SPAN_MAX), dir * rcpDirMin)\n"
-            ") * inv_vp;       \n"
+            ") * inv_vp;\n"
 
-            "vec3 rgbA = (1.0/2.0) * (                                                             \n"
-            "  texture2D(u_tex, v_uv + dir * (1.0/3.0 - 0.5)).xyz +                   \n"
-            "  texture2D(u_tex, v_uv + dir * (2.0/3.0 - 0.5)).xyz                     \n"
-            ");                                                                                    \n"
-            "vec3 rgbB = rgbA * (1.0/2.0) + (1.0/4.0) * (                                          \n"
-            "  texture2D(u_tex, v_uv + dir * (0.0/3.0 - 0.5)).xyz +                   \n"
-            "  texture2D(u_tex, v_uv + dir * (3.0/3.0 - 0.5)).xyz                     \n"
-            ");                                                                                    \n"
-            "float lumaB = dot(rgbB, luma);                                                        \n"
+            "vec3 rgbA = (1.0/2.0) * (\n"
+            "  texture2D(u_tex, v_uv + dir * (1.0/3.0 - 0.5)).xyz +\n"
+            "  texture2D(u_tex, v_uv + dir * (2.0/3.0 - 0.5)).xyz\n"
+            ");\n"
+            "vec3 rgbB = rgbA * (1.0/2.0) + (1.0/4.0) * (\n"
+            "  texture2D(u_tex, v_uv + dir * (0.0/3.0 - 0.5)).xyz +\n"
+            "  texture2D(u_tex, v_uv + dir * (3.0/3.0 - 0.5)).xyz\n"
+            ");\n"
+            "float lumaB = dot(rgbB, luma);\n"
 
-            "if((lumaB < lumaMin) || (lumaB > lumaMax)){                                           \n"
-            "    gl_FragColor.xyz=rgbA;                                                            \n"
-            "} else {                                                                              \n"
-            "    gl_FragColor.xyz=rgbB;                                                            \n"
-            "}                                                                                     \n"
-            "gl_FragColor.a = 1.0;                                                                 \n"
-          "}                                                                                       \n"
+            "if((lumaB < lumaMin) || (lumaB > lumaMax)){\n"
+            "    gl_FragColor.xyz=rgbA;\n"
+            "} else {\n"
+            "    gl_FragColor.xyz=rgbB;\n"
+            "}\n"
+            "gl_FragColor.a = 1.0;\n"
+          "}\n"
 #else
 #error "no such aliasing!"
 #endif
@@ -391,8 +546,8 @@ static SDL_AppResult gl_init(void) {
   /* fullscreen tri for post-processing */
   {
     /* create vbo, fill it */
-    glGenBuffers(1, &jeux.gl.fullscreen_vtx);
-    glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.fullscreen_vtx);
+    glGenBuffers(1, &jeux.gl.pp.buf_vtx);
+    glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.pp.buf_vtx);
     GLfloat vtx[] = {
       -1.0f,  3.0f, 0.0f,
       -1.0f, -1.0f, 0.0f,
@@ -400,23 +555,22 @@ static SDL_AppResult gl_init(void) {
     };
     glBufferData(GL_ARRAY_BUFFER, sizeof(vtx), vtx, GL_STATIC_DRAW);
 
-    jeux.gl.shader.pp_u_win_size = glGetUniformLocation(jeux.gl.shader.pp, "u_win_size");
-    jeux.gl.shader.pp_a_pos      = glGetAttribLocation( jeux.gl.shader.pp, "a_pos");
+    jeux.gl.pp.shader_u_win_size = glGetUniformLocation(jeux.gl.pp.shader, "u_win_size");
+    jeux.gl.pp.shader_a_pos      = glGetAttribLocation( jeux.gl.pp.shader, "a_pos");
   }
 
   /* dynamic geometry buffer */
   {
-    glGenBuffers(1, &jeux.gl.geo_vtx);
-    glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo_vtx);
-    GLfloat vtx[] = {
-         0.0f,  0.5f, 0.0f,
-        -0.5f, -0.5f, 0.0f,
-         0.5f, -0.5f, 0.0f
-    };
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vtx), vtx, GL_STATIC_DRAW);
+    glGenBuffers(1, &jeux.gl.geo.buf_vtx);
+    glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.buf_vtx);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(jeux.gl.geo.vtx), NULL, GL_DYNAMIC_DRAW);
+
+    glGenBuffers(1, &jeux.gl.geo.buf_idx);
+    glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.buf_idx);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(jeux.gl.geo.idx), NULL, GL_DYNAMIC_DRAW);
 
     /* shader data layout */
-    jeux.gl.shader.geo_a_pos = glGetAttribLocation(jeux.gl.shader.geo, "a_pos");
+    jeux.gl.geo.shader_a_pos = glGetAttribLocation(jeux.gl.geo.shader, "a_pos");
   }
 
   gl_resize();
@@ -487,19 +641,19 @@ static SDL_AppResult gl_init(void) {
   return SDL_APP_CONTINUE;
 }
 
-/* recreates jeux.gl.screen resources to match new jeux.window_size */
+/* recreates jeux.gl.pp.screen resources to match new jeux.window_size */
 static void gl_resize(void) {
   /* passing in zero is ignored here, so this doesn't throw an error if screen has never inited */
-  glDeleteFramebuffers(1, &jeux.gl.screen.pp_fb);
-  glDeleteTextures(1, &jeux.gl.screen.pp_tex);
+  glDeleteFramebuffers(1, &jeux.gl.pp.screen.pp_fb);
+  glDeleteTextures(1, &jeux.gl.pp.screen.pp_tex);
 
-  /* create postprocessing framebuffer - writes to jeux.gl.screen.pp_tex, jeux.gl.screen.pp_fb */
+  /* create postprocessing framebuffer - writes to jeux.gl.pp.screen.pp_tex, jeux.gl.pp.screen.pp_fb */
   {
-    glGenFramebuffers(1, &jeux.gl.screen.pp_fb);
-    glBindFramebuffer(GL_FRAMEBUFFER, jeux.gl.screen.pp_fb);
+    glGenFramebuffers(1, &jeux.gl.pp.screen.pp_fb);
+    glBindFramebuffer(GL_FRAMEBUFFER, jeux.gl.pp.screen.pp_fb);
 
-    glGenTextures(1, &jeux.gl.screen.pp_tex);
-    glBindTexture(GL_TEXTURE_2D, jeux.gl.screen.pp_tex);
+    glGenTextures(1, &jeux.gl.pp.screen.pp_tex);
+    glBindTexture(GL_TEXTURE_2D, jeux.gl.pp.screen.pp_tex);
 #if CURRENT_ALIASING == ANTIALIAS_LINEAR || CURRENT_ALIASING == ANTIALIAS_FXAA
     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -514,8 +668,8 @@ static void gl_resize(void) {
       /* GLenum  target         */ GL_TEXTURE_2D,
       /* GLint   level          */ 0,
       /* GLint   internalFormat */ GL_RGBA,
-      /* GLsizei width          */ jeux.window_size_x*jeux.gl.fb_scale,
-      /* GLsizei height         */ jeux.window_size_y*jeux.gl.fb_scale,
+      /* GLsizei width          */ jeux.window_size_x*jeux.gl.pp.fb_scale,
+      /* GLsizei height         */ jeux.window_size_y*jeux.gl.pp.fb_scale,
       /* GLint   border         */ 0,
       /* GLenum  format         */ GL_RGBA,
       /* GLenum  type           */ GL_UNSIGNED_BYTE,
@@ -526,7 +680,7 @@ static void gl_resize(void) {
       GL_FRAMEBUFFER,
       GL_COLOR_ATTACHMENT0,
       GL_TEXTURE_2D,
-      jeux.gl.screen.pp_tex,
+      jeux.gl.pp.screen.pp_tex,
       0
     );
 
@@ -544,7 +698,7 @@ static void gl_text_reset(void) {
 
 static void gl_text_draw(const char *msg, float screen_x, float screen_y, float size) {
   gl_text_Vtx *vtx_wtr = jeux.gl.text.vtx_wtr;
-  gl_text_Tri *idx_wtr = jeux.gl.text.idx_wtr;
+  gl_Tri      *idx_wtr = jeux.gl.text.idx_wtr;
 
   size *= SDL_GetWindowPixelDensity(jeux.sdl.window);
   float scale = (size / font_BASE_CHAR_SIZE);
@@ -565,8 +719,8 @@ static void gl_text_draw(const char *msg, float screen_x, float screen_y, float 
     *vtx_wtr++ = (gl_text_Vtx) { x         ,  y         , l->x            , l->y            , size };
     *vtx_wtr++ = (gl_text_Vtx) { x         ,  y - size_y, l->x            , l->y + l->size_y, size };
 
-    *idx_wtr++ = (gl_text_Tri) { start + 0, start + 1, start + 2 };
-    *idx_wtr++ = (gl_text_Tri) { start + 2, start + 3, start + 0 };
+    *idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
+    *idx_wtr++ = (gl_Tri) { start + 2, start + 3, start + 0 };
 
     pen_x += l->advance * scale;
   } while (*msg++);
@@ -575,16 +729,65 @@ static void gl_text_draw(const char *msg, float screen_x, float screen_y, float 
   jeux.gl.text.idx_wtr = idx_wtr;
 }
 
+static void gl_geo_reset(void) {
+  jeux.gl.geo.vtx_wtr = jeux.gl.geo.vtx;
+  jeux.gl.geo.idx_wtr = jeux.gl.geo.idx;
+}
+
+static gl_geo_Vtx gl_geo_vtx_transform(gl_geo_Vtx v) {
+  f4 p = { .p = { v.x, v.y, v.z, 1.0f } };
+
+  float ar = (float)(jeux.window_size_y) / (float)(jeux.window_size_x);
+  f4x4 cam = f4x4_ortho(
+     -2.0f     ,  2.0f     ,
+     -2.0f * ar,  2.0f * ar,
+    -20.0f     , 20.0f    
+  );
+
+  float x = cosf(jeux.elapsed * 0.5f);
+  float y = sinf(jeux.elapsed * 0.5f);
+  f4x4 orbit = f4x4_target_to(
+    (f3) {    x,    y, 0.8f },
+    (f3) { 0.0f, 0.0f, 0.0f },
+    (f3) { 0.0f, 0.0f, 1.0f }
+  );
+  cam = f4x4_mulf4x4(cam, f4x4_invert(orbit));
+
+  p = f4x4_mul_f4(cam, p);
+
+  v.x = p.p.x;
+  v.y = p.p.y;
+  v.z = p.p.z;
+
+  return v;
+}
+static void gl_geo_line(f2 from, f2 to, float thickness) {
+  *jeux.gl.geo.vtx_wtr++ = gl_geo_vtx_transform((gl_geo_Vtx) {  0.5f,  0.5f, 0.0f });
+  *jeux.gl.geo.vtx_wtr++ = gl_geo_vtx_transform((gl_geo_Vtx) {  0.5f, -0.5f, 0.0f });
+  *jeux.gl.geo.vtx_wtr++ = gl_geo_vtx_transform((gl_geo_Vtx) { -0.5f, -0.5f, 0.0f });
+  *jeux.gl.geo.vtx_wtr++ = gl_geo_vtx_transform((gl_geo_Vtx) { -0.5f,  0.5f, 0.0f });
+
+  *jeux.gl.geo.idx_wtr++ = (gl_Tri) { 0, 1, 2 };
+  *jeux.gl.geo.idx_wtr++ = (gl_Tri) { 2, 3, 0 };
+}
+
 SDL_AppResult SDL_AppIterate(void *appstate) {
-  // uint64_t ts_now = SDL_GetPerformanceCounter();
+  uint64_t ts_now = SDL_GetPerformanceCounter();
   // double delta_time = (double)(ts_now - jeux.ts_last_frame) / (double)SDL_GetPerformanceFrequency();
-  // jeux.ts_last_frame = ts_now;
+  jeux.ts_last_frame = ts_now;
 
-  // double elapsed = (double)(ts_now - jeux.ts_first) / (double)SDL_GetPerformanceFrequency();
+  jeux.elapsed = (double)(ts_now - jeux.ts_first) / (double)SDL_GetPerformanceFrequency();
 
+  gl_geo_reset();
   gl_text_reset();
 
-  gl_text_draw(
+  gl_geo_line(
+    (f2) { -0.5, -0.5 },
+    (f2) {  0.5,  0.5 },
+    0.1f
+  );
+
+  if (0) gl_text_draw(
     "hi! i'm ced?",
     jeux.window_size_x * 0.5,
     jeux.window_size_y * 0.5,
@@ -596,20 +799,38 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     {
       /* switch to the fb that gets postprocessing applied later */
-      glViewport(0, 0, jeux.window_size_x*jeux.gl.fb_scale, jeux.window_size_y*jeux.gl.fb_scale);
-      glBindFramebuffer(GL_FRAMEBUFFER, jeux.gl.screen.pp_fb);
+      glViewport(0, 0, jeux.window_size_x*jeux.gl.pp.fb_scale, jeux.window_size_y*jeux.gl.pp.fb_scale);
+      glBindFramebuffer(GL_FRAMEBUFFER, jeux.gl.pp.screen.pp_fb);
 
       /* clear color */
       glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
       glClear(GL_COLOR_BUFFER_BIT);
 
-      glUseProgram(jeux.gl.shader.geo);
+      {
+        glUseProgram(jeux.gl.geo.shader);
 
-      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo_vtx);
-      glEnableVertexAttribArray(jeux.gl.shader.geo_a_pos);
-      glVertexAttribPointer(jeux.gl.shader.geo_a_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
+        {
+          gl_geo_Vtx *vtx = jeux.gl.geo.vtx;
+          gl_Tri     *idx = jeux.gl.geo.idx;
 
-      glDrawArrays(GL_TRIANGLES, 0, 3);
+          {
+            glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.buf_vtx);
+            size_t len = jeux.gl.geo.vtx_wtr - vtx;
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vtx[0]) * len, vtx);
+          }
+
+          {
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, jeux.gl.geo.buf_idx);
+            size_t len = jeux.gl.geo.idx_wtr - idx;
+            glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, sizeof(idx[0]) * len, idx);
+          }
+        }
+
+        glEnableVertexAttribArray(jeux.gl.geo.shader_a_pos);
+        glVertexAttribPointer(jeux.gl.geo.shader_a_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
+
+        glDrawElements(GL_TRIANGLES, 3*(jeux.gl.geo.idx_wtr - jeux.gl.geo.idx), GL_UNSIGNED_SHORT, 0);
+      }
     }
 
     /* stop writing to the framebuffer, start writing to the screen */
@@ -618,13 +839,13 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     /* draw the contents of the framebuffer with postprocessing/aa applied */
     {
-      glUseProgram(jeux.gl.shader.pp);
-      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.fullscreen_vtx);
-      glEnableVertexAttribArray(jeux.gl.shader.pp_a_pos);
-      glVertexAttribPointer(jeux.gl.shader.pp_a_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
+      glUseProgram(jeux.gl.pp.shader);
+      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.pp.buf_vtx);
+      glEnableVertexAttribArray(jeux.gl.pp.shader_a_pos);
+      glVertexAttribPointer(jeux.gl.pp.shader_a_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
 
-      glBindTexture(GL_TEXTURE_2D, jeux.gl.screen.pp_tex);
-      glUniform2f(jeux.gl.shader.pp_u_win_size, jeux.window_size_x, jeux.window_size_y);
+      glBindTexture(GL_TEXTURE_2D, jeux.gl.pp.screen.pp_tex);
+      glUniform2f(jeux.gl.pp.shader_u_win_size, jeux.window_size_x, jeux.window_size_y);
       glDrawArrays(GL_TRIANGLES, 0, 3);
     }
 
@@ -635,7 +856,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       /* update VBO contents */
       {
         gl_text_Vtx *vtx = jeux.gl.text.vtx;
-        gl_text_Tri *idx = jeux.gl.text.idx;
+        gl_Tri      *idx = jeux.gl.text.idx;
 
         {
           glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.text.buf_vtx);
@@ -652,7 +873,6 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
       {
         size_t size = sizeof(gl_text_Vtx);
-        size_t pos_offset = 0;
 
         glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.text.buf_vtx);
         glEnableVertexAttribArray(jeux.gl.text.shader_a_pos);
