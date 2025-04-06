@@ -17,6 +17,17 @@ typedef struct { float x, y; } f2;
 typedef struct { float x, y, z; } f3;
 typedef union { float arr[4]; struct { float x, y, z, w; } p; f3 p3; } f4;
 typedef union { float arr[4][4]; f4 rows[4]; float floats[16]; } f4x4;
+
+static float lerp(float v0, float v1, float t) { return (1.0f - t) * v0 + t * v1; }
+
+static f3 lerp3(f3 a, f3 b, float t) {
+  return (f3) {
+    .x = lerp(a.x, b.x, t),
+    .y = lerp(a.y, b.y, t),
+    .z = lerp(a.z, b.z, t)
+  };
+}
+
 static f4x4 f4x4_ortho(float left, float right, float bottom, float top, float near, float far) {
     f4x4 res = {0};
 
@@ -1082,11 +1093,30 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     /* draw figure */
     {
+      float t = fmodf(jeux.elapsed, animdata_duration);
+
+      size_t rhs_frame = -1;
+      for (size_t i = 0; i < jx_COUNT(animdata_frames); i++)
+        if (animdata_frames[i].time > t) { rhs_frame = i; break; }
+      bool last_frame = rhs_frame == -1;
+
+      size_t lhs_frame = (last_frame ? jx_COUNT(animdata_frames) : rhs_frame) - 1;
+      rhs_frame = (lhs_frame + 1) % jx_COUNT(animdata_frames);
+      float next_frame_t = last_frame ? animdata_duration : animdata_frames[rhs_frame].time;
+      float this_frame_t = animdata_frames[lhs_frame].time;
+      float tween_t = (t - this_frame_t) / (next_frame_t - this_frame_t);
+
+#define joint_pos(joint) lerp3(\
+  animdata_frames[lhs_frame].joint_pos[joint], \
+  animdata_frames[rhs_frame].joint_pos[joint], \
+  tween_t \
+)
+
       for (int i = 0; i < jx_COUNT(animdata_limb_connections); i++) {
         animdata_JointKey_t from = animdata_limb_connections[i].from,
                               to = animdata_limb_connections[i].to;
-        f3 a = jeux_world_to_screen(animdata_frames[0].joint_pos[from]);
-        f3 b = jeux_world_to_screen(animdata_frames[0].joint_pos[  to]);
+        f3 a = jeux_world_to_screen(joint_pos(from));
+        f3 b = jeux_world_to_screen(joint_pos(  to));
 
         float thickness = 4.0f;
 
@@ -1099,19 +1129,21 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
       /* draw head */
       {
-        f3 head = animdata_frames[0].joint_pos[animdata_JointKey_Head];
+        f3 head = joint_pos(animdata_JointKey_Head);
 
         /* head assets are 2x2x2 centered around (0, 0, 0) */
-        float size = 0.175f;
+        float radius = 0.175f;
 
-        /* if this is 0.8f, 20% will be stuck in the neck */
-        head.z += size*0.8f;
+        /* if this is 0.8f, a perfectly (0, 0, 1) aligned neck will penetrate 20% */
+        head.z += radius*0.8f;
 
         *jeux.gl.geo.model_draws_wtr++ = (gl_ModelDraw) {
           .pos = head,
-          .scale = size
+          .scale = radius
         };
       }
+
+#undef joint_pos
     }
 
     if (0) gl_text_draw(
