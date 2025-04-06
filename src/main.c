@@ -166,7 +166,7 @@ typedef struct {
 } gl_geo_Vtx;
 typedef struct { uint16_t a, b, c; } gl_Tri;
 
-#include "../models/include/head.h"
+#include "../models/include/helmet.h"
 
 static struct {
   struct {
@@ -370,7 +370,7 @@ static SDL_AppResult gl_init(void) {
           /* debug normals */
           // "  gl_FragColor = vec4(mix(vec3(1), v_normal, 0.5), 1.0);\n"
 
-          "  vec3 light_dir = normalize(vec3(1.0, 4.0, 5.9));\n"
+          "  vec3 light_dir = normalize(vec3(4.0, 1.0, 5.9));\n"
           "  float diffuse = max(dot(v_normal, light_dir), 0.0);\n"
           "  float ramp = 0.0;\n"
           "       if (diffuse > 0.923) ramp = 1.00;\n"
@@ -626,10 +626,10 @@ static SDL_AppResult gl_init(void) {
     }
 
     {
-      size_t vtx_count = jx_COUNT(model_vtx_Head);
-      size_t tri_count = jx_COUNT(model_tri_Head);
-      gl_geo_Vtx *vtx  =          model_vtx_Head;
-      gl_Tri     *tri  =          model_tri_Head;
+      size_t vtx_count = jx_COUNT(model_vtx_Horned_Helmet);
+      size_t tri_count = jx_COUNT(model_tri_Horned_Helmet);
+      gl_geo_Vtx *vtx  =          model_vtx_Horned_Helmet;
+      gl_Tri     *tri  =          model_tri_Horned_Helmet;
 
       jeux.gl.geo.koob_tri_count = tri_count;
 
