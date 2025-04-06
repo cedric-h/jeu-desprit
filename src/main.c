@@ -109,7 +109,7 @@ static f4x4 f4x4_invert(f4x4 a) {
     } };
 }
 
-static f4x4 f4x4_mulf4x4(f4x4 a, f4x4 b) {
+static f4x4 f4x4_mul_f4x4(f4x4 a, f4x4 b) {
   f4x4 out = {0};
 
   /* cache only the current line of the second matrix */
@@ -149,6 +149,27 @@ static f4 f4x4_mul_f4(f4x4 m, f4 v) {
     return res;
 }
 
+static f4x4 f4x4_scale(float scale) {
+    f4x4 res = {0};
+    res.arr[0][0] = scale;
+    res.arr[1][1] = scale;
+    res.arr[2][2] = scale;
+    res.arr[3][3] = 1.0f;
+    return res;
+}
+
+static f4x4 f4x4_move(f3 pos) {
+    f4x4 res = {0};
+    res.arr[0][0] = 1.0f;
+    res.arr[1][1] = 1.0f;
+    res.arr[2][2] = 1.0f;
+    res.arr[3][0] = pos.x;
+    res.arr[3][1] = pos.y;
+    res.arr[3][2] = pos.z;
+    res.arr[3][3] = 1.0f;
+    return res;
+}
+
 
 #define ANTIALIAS_NONE    0
 #define ANTIALIAS_LINEAR  1
@@ -159,14 +180,21 @@ static f4 f4x4_mul_f4(f4x4 m, f4 v) {
 #define SRGB
 
 typedef struct { float x, y, u, v, size; } gl_text_Vtx;
+typedef struct { uint8_t r, g, b, a; } Color;
 typedef struct {
-  struct { float x, y, z; } pos;
-  struct { uint8_t r, g, b, a; } color;
-  struct { float x, y, z; } normal;
+  f3 pos;
+  Color color;
+  f3 normal;
 } gl_geo_Vtx;
 typedef struct { uint16_t a, b, c; } gl_Tri;
 
-#include "../models/include/helmet.h"
+typedef struct {
+  f3 pos;
+  float scale;
+} gl_ModelDraw;
+
+#include "../models/include/head.h"
+#include "walk.h"
 
 static struct {
   struct {
@@ -195,6 +223,14 @@ static struct {
       GLuint buf_vtx;
       GLuint buf_idx;
 
+      /* Dynamic, per-frame geometry like lines and such are simply written
+       * directly into their buffers and subsequently rendered in a single call.
+       *
+       * Static geometry (models made in Blender), rather than being drawn directly,
+       * is requested to be drawn through the model_draws queue. This allows us to
+       * handle instancing, sorting etc. in a pass immediately before rendering. */
+      gl_ModelDraw  model_draws[999];
+      gl_ModelDraw* model_draws_wtr;
       size_t koob_tri_count;
       GLuint koob_buf_vtx;
       GLuint koob_buf_idx;
@@ -626,10 +662,10 @@ static SDL_AppResult gl_init(void) {
     }
 
     {
-      size_t vtx_count = jx_COUNT(model_vtx_Horned_Helmet);
-      size_t tri_count = jx_COUNT(model_tri_Horned_Helmet);
-      gl_geo_Vtx *vtx  =          model_vtx_Horned_Helmet;
-      gl_Tri     *tri  =          model_tri_Horned_Helmet;
+      size_t vtx_count = jx_COUNT(model_vtx_Head);
+      size_t tri_count = jx_COUNT(model_tri_Head);
+      gl_geo_Vtx *vtx  =          model_vtx_Head;
+      gl_Tri     *tri  =          model_tri_Head;
 
       jeux.gl.geo.koob_tri_count = tri_count;
 
@@ -921,9 +957,27 @@ static void gl_text_draw(const char *msg, float screen_x, float screen_y, float 
 static void gl_geo_reset(void) {
   jeux.gl.geo.vtx_wtr = jeux.gl.geo.vtx;
   jeux.gl.geo.idx_wtr = jeux.gl.geo.idx;
+  jeux.gl.geo.model_draws_wtr = jeux.gl.geo.model_draws;
 }
 
-static void gl_geo_line(f3 a, f3 b, float thickness) {
+static void gl_geo_circle(size_t detail, f3 center, float radius, Color color) {
+
+  uint16_t start = jeux.gl.geo.vtx_wtr - jeux.gl.geo.vtx;
+
+  /* center of the triangle fan */
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { .pos = center, .color = color };
+
+  for (int i = 0; i <= detail; i++) {
+    float t = (float)i / (float)detail * M_PI * 2.0f;
+    float x = center.x + cosf(t) * radius;
+    float y = center.y + sinf(t) * radius;
+    *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { x, y, center.z }, color };
+
+    if (i > 0) *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start, start + i, start + i + 1 };
+  }
+}
+
+static void gl_geo_line(f3 a, f3 b, float thickness, Color color) {
   float dx = a.x - b.x;
   float dy = a.y - b.y;
   float dlen = dx*dx + dy*dy;
@@ -934,10 +988,10 @@ static void gl_geo_line(f3 a, f3 b, float thickness) {
 
   uint16_t start = jeux.gl.geo.vtx_wtr - jeux.gl.geo.vtx;
 
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { a.x + nx, a.y + ny, a.z }, { 200, 80, 20 } };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { a.x - nx, a.y - ny, a.z }, { 200, 80, 20 } };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { b.x + nx, b.y + ny, b.z }, { 200, 80, 20 } };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { b.x - nx, b.y - ny, b.z }, { 200, 80, 20 } };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { a.x + nx, a.y + ny, a.z }, color };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { a.x - nx, a.y - ny, a.z }, color };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { b.x + nx, b.y + ny, b.z }, color };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { b.x - nx, b.y - ny, b.z }, color };
 
   *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
   *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start + 2, start + 1, start + 3 };
@@ -953,7 +1007,7 @@ static f3 jeux_world_to_screen(f3 pt) {
   return p.p3;
 }
 
-static void gl_geo_box_outline(f3 p, f3 scale, float thickness) {
+static void gl_geo_box_outline(f3 center, f3 scale, float thickness, Color color) {
 
   for (float dir_x = 0; dir_x < 2; dir_x++) {
     for (float dir_y = -1; dir_y <= 1; dir_y += 2) {
@@ -970,7 +1024,12 @@ static void gl_geo_box_outline(f3 p, f3 scale, float thickness) {
         if (dir_x) a.arr[(axis_i+1)%3] *= -1;
         if (dir_x) b.arr[(axis_i+1)%3] *= -1;
 
-        gl_geo_line(jeux_world_to_screen(a.p3), jeux_world_to_screen(b.p3), 2.0f);
+        a.p.x *=  scale.x; a.p.y *=  scale.y; a.p.z *=  scale.z;
+        b.p.x *=  scale.x; b.p.y *=  scale.y; b.p.z *=  scale.z;
+        a.p.x += center.x; a.p.y += center.y; a.p.z += center.z;
+        b.p.x += center.x; b.p.y += center.y; b.p.z += center.z;
+
+        gl_geo_line(jeux_world_to_screen(a.p3), jeux_world_to_screen(b.p3), thickness, color);
       }
     }
   }
@@ -1001,11 +1060,11 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       float x = cosf(jeux.elapsed * 0.5f);
       float y = sinf(jeux.elapsed * 0.5f);
       f4x4 orbit = f4x4_target_to(
-        (f3) {    x,    y, 1.2f },
-        (f3) { 0.0f, 0.0f, 0.5f },
+        (f3) {    x,    y, 2.2f },
+        (f3) { 0.0f, 0.0f, 1.0f },
         (f3) { 0.0f, 0.0f, 1.0f }
       );
-      jeux.camera = f4x4_mulf4x4(projection, f4x4_invert(orbit));
+      jeux.camera = f4x4_mul_f4x4(projection, f4x4_invert(orbit));
     }
   }
 
@@ -1014,9 +1073,46 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     gl_geo_reset();
     gl_text_reset();
 
-    gl_geo_box_outline((f3) { 0, 0, 0 },
-                       (f3) { 1, 1, 1 },
-                       2.0f);
+    gl_geo_box_outline(
+      (f3) { 0.0f, 0.0f, 1.0f },
+      (f3) { 0.3f, 0.3f, 1.0f },
+      2.0f,
+      (Color) { 200, 80, 20, 255 }
+    );
+
+    /* draw figure */
+    {
+      for (int i = 0; i < jx_COUNT(animdata_limb_connections); i++) {
+        animdata_JointKey_t from = animdata_limb_connections[i].from,
+                              to = animdata_limb_connections[i].to;
+        f3 a = jeux_world_to_screen(animdata_frames[0].joint_pos[from]);
+        f3 b = jeux_world_to_screen(animdata_frames[0].joint_pos[  to]);
+
+        float thickness = 4.0f;
+
+        Color color = { 1, 1, 1, 255 };
+        gl_geo_line(a, b, thickness, color);
+
+        gl_geo_circle(8, a, thickness * 0.5f, color);
+        gl_geo_circle(8, b, thickness * 0.5f, color);
+      }
+
+      /* draw head */
+      {
+        f3 head = animdata_frames[0].joint_pos[animdata_JointKey_Head];
+
+        /* head assets are 2x2x2 centered around (0, 0, 0) */
+        float size = 0.175f;
+
+        /* if this is 0.8f, 20% will be stuck in the neck */
+        head.z += size*0.8f;
+
+        *jeux.gl.geo.model_draws_wtr++ = (gl_ModelDraw) {
+          .pos = head,
+          .scale = size
+        };
+      }
+    }
 
     if (0) gl_text_draw(
       "hi! i'm ced?",
@@ -1073,13 +1169,19 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         }
 
         /* draw static geo content */
-        {
+        size_t models_to_draw = jeux.gl.geo.model_draws_wtr - jeux.gl.geo.model_draws;
+        for (int i = 0; i < models_to_draw; i++) {
+          gl_ModelDraw *draw = jeux.gl.geo.model_draws + i;
+
           glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.koob_buf_vtx);
           glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, jeux.gl.geo.koob_buf_idx);
 
           GEO_VTX_BIND_LAYOUT;
 
-          glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, jeux.camera.floats);
+          f4x4 mvp = jeux.camera;
+          mvp = f4x4_mul_f4x4(mvp, f4x4_move(draw->pos));
+          mvp = f4x4_mul_f4x4(mvp, f4x4_scale(draw->scale));
+          glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, mvp.floats);
 
           glDrawElements(GL_TRIANGLES, 3 * jeux.gl.geo.koob_tri_count, GL_UNSIGNED_SHORT, 0);
         }
