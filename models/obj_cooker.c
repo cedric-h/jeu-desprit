@@ -69,39 +69,44 @@ int cook(char *file_name) {
   // fprintf(out, "  struct { uint8_t r, g, b, a; } color;\n");
   // fprintf(out, "} gl_geo_Vtx;\n\n");
 
-  size_t vtx_count = 0;
-  size_t tri_count = 0;
+  size_t vtx_count    = 0;
+  size_t tri_count    = 0;
+  size_t normal_count = 0;
   {
     char *newline_ctx;
-    char *line = strtok_r(obj, "\n", &newline_ctx);
+    char *file = malloc(strlen(obj) + 1);
+    strcpy(file, obj);
+    char *line = strtok_r(file, "\n", &newline_ctx);
     do {
-      vtx_count += line[0] == 'v';
-      tri_count += line[0] == 'f';
+      vtx_count    += line[0] == 'v' && line[1] == ' ';
+      normal_count += line[0] == 'v' && line[1] == 'n';
+      tri_count    += line[0] == 'f';
     } while((line = strtok_r(NULL, "\n", &newline_ctx)));
+    printf("tri_count = %ld\n", tri_count);
+    printf("vtx_count = %ld\n", vtx_count);
+    printf("normal_count = %ld\n", normal_count);
+    free(file);
   }
 
-  gl_geo_Vtx *vtxs = calloc(vtx_count, sizeof(gl_geo_Vtx));
-  gl_Tri     *tris = calloc(tri_count, sizeof(gl_Tri));
-  size_t vtx_idx = 0;
-  size_t tri_idx = 0;
-  size_t vtx_idx_normal = 0;
+  gl_geo_Vtx                *vtxs    = calloc(   vtx_count, sizeof(gl_geo_Vtx));
+  gl_Tri                    *tris    = calloc(   tri_count, sizeof(gl_Tri)    );
+  struct { float x, y, z; } *normals = calloc(normal_count, sizeof(float) * 3 );
+  int vtx_idx    = -1;
+  int tri_idx    = -1;
+  int normal_idx = -1;
 
   char model_name[999] = {0};
   char *newline_ctx;
   char *line = strtok_r(obj, "\n", &newline_ctx);
   do {
-    printf("%s\n", line);
-
     char *space_ctx;
     char *word = strtok_r(line, " ", &space_ctx);
     char op = word[0];
-    int op_vrt    = op == 'v' && word[1] == ' ';
+    int op_vrt    = op == 'v' && word[1] == '\0';
     int op_normal = op == 'v' && word[1] == 'n';
 
     int index = 0;
     do {
-      puts(word);
-
       if (op == 'o' && index == 1) {
         strlcpy(model_name, word, sizeof(model_name));
       }
@@ -114,20 +119,31 @@ int cook(char *file_name) {
       if (op_vrt && index == 5) vtxs[vtx_idx].color.g = srgb2linear(strtof(word, NULL));
       if (op_vrt && index == 6) vtxs[vtx_idx].color.b = srgb2linear(strtof(word, NULL));
 
-      if (op_normal && index == 0) vtx_idx_normal++;
-      if (op_normal && index == 1) vtxs[vtx_idx_normal].normal.x = strtof(word, NULL);
-      if (op_normal && index == 2) vtxs[vtx_idx_normal].normal.y = strtof(word, NULL);
-      if (op_normal && index == 3) vtxs[vtx_idx_normal].normal.z = strtof(word, NULL);
+      if (op_normal && index == 0) normal_idx++;
+      if (op_normal && index == 1) normals[normal_idx].x = strtof(word, NULL);
+      if (op_normal && index == 2) normals[normal_idx].y = strtof(word, NULL);
+      if (op_normal && index == 3) normals[normal_idx].z = strtof(word, NULL);
 
       if (op == 'f' && index == 0) tri_idx++;
-      if (op == 'f' && index == 1) tris[tri_idx].a = strtol(word, NULL, 10) - 1;
-      if (op == 'f' && index == 2) tris[tri_idx].b = strtol(word, NULL, 10) - 1;
-      if (op == 'f' && index == 3) tris[tri_idx].c = strtol(word, NULL, 10) - 1;
+      if (op == 'f' && index > 0) {
+        char *slash_ctx;
+        word = strtok_r(word, "//", &slash_ctx);
+        uint16_t lhs = strtol(word, NULL, 10) - 1;
+        word = strtok_r(NULL, "//", &slash_ctx);
+        uint16_t rhs = strtol(word, NULL, 10) - 1;
+
+        vtxs[lhs].normal.x = normals[rhs].x;
+        vtxs[lhs].normal.y = normals[rhs].y;
+        vtxs[lhs].normal.z = normals[rhs].z;
+
+        if (op == 'f' && index == 1) tris[tri_idx].a = lhs;
+        if (op == 'f' && index == 2) tris[tri_idx].b = lhs;
+        if (op == 'f' && index == 3) tris[tri_idx].c = lhs;
+      }
 
       index++;
     } while ((word = strtok_r(NULL, " ", &space_ctx)));
 
-    // puts("\n");
   } while ((line = strtok_r(NULL, "\n", &newline_ctx)));
 
   fprintf(out, "gl_geo_Vtx model_vtx_%s[] = {\n", model_name);
@@ -150,6 +166,16 @@ int cook(char *file_name) {
 
   fprintf(out, "};\n\n");
   fprintf(out, "gl_Tri model_tri_%s[] = {\n", model_name);
+
+  for (int i = 0; i < tri_count; i++) {
+    fprintf(
+      out,
+      "  { %5hu, %5hu, %5hu },\n",
+      tris[i].a,
+      tris[i].b,
+      tris[i].c
+    );
+  }
 
   fprintf(out, "};\n");
 

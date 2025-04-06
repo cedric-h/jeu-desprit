@@ -15,7 +15,7 @@
 #define jx_COUNT(arr) (sizeof(arr) / sizeof((arr)[0]))
 typedef struct { float x, y; } f2;
 typedef struct { float x, y, z; } f3;
-typedef union { float arr[4]; struct { float x, y, z, w; } p; } f4;
+typedef union { float arr[4]; struct { float x, y, z, w; } p; f3 p3; } f4;
 typedef union { float arr[4][4]; f4 rows[4]; float floats[16]; } f4x4;
 static f4x4 f4x4_ortho(float left, float right, float bottom, float top, float near, float far) {
     f4x4 res = {0};
@@ -166,7 +166,7 @@ typedef struct {
 } gl_geo_Vtx;
 typedef struct { uint16_t a, b, c; } gl_Tri;
 
-#include "../models/include/helmet.h"
+#include "../models/include/head.h"
 
 static struct {
   struct {
@@ -174,9 +174,15 @@ static struct {
     SDL_GLContext  gl_ctx;
   } sdl;
 
-  size_t window_size_x, window_size_y;
+  /* input */
+  size_t win_size_x, win_size_y;
+
+  /* timekeeping */
   uint64_t ts_last_frame, ts_first;
   double elapsed;
+
+  /* camera */
+  f4x4 camera, screen;
 
   struct {
     struct {
@@ -202,6 +208,9 @@ static struct {
 
     struct {
       float fb_scale;
+
+      /* jeux.win_size * SDL_GetWindowPixelDensity() */
+      float phys_win_size_x, phys_win_size_y;
 
       GLuint buf_vtx;
 
@@ -241,8 +250,8 @@ static struct {
 
   } gl;
 } jeux = {
-  .window_size_x = 800,
-  .window_size_y = 450,
+  .win_size_x = 800,
+  .win_size_y = 450,
   .gl.pp = {
 #if   CURRENT_ALIASING == ANTIALIAS_4xSSAA
     .fb_scale = 4.0f,
@@ -280,8 +289,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 
     jeux.sdl.window = SDL_CreateWindow(
       "jeu desprit",
-      jeux.window_size_x,
-      jeux.window_size_y,
+      jeux.win_size_x,
+      jeux.win_size_y,
       SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
     );
     if (jeux.sdl.window == NULL) {
@@ -296,8 +305,6 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     }
   }
 
-  jeux.window_size_x *= SDL_GetWindowPixelDensity(jeux.sdl.window);
-  jeux.window_size_y *= SDL_GetWindowPixelDensity(jeux.sdl.window);
   jeux.ts_last_frame = SDL_GetPerformanceCounter();
   jeux.ts_first = SDL_GetPerformanceCounter();
 
@@ -307,8 +314,8 @@ static void gl_resize(void);
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
   if (event->type == SDL_EVENT_QUIT) return SDL_APP_SUCCESS;
   if (event->type == SDL_EVENT_WINDOW_RESIZED) {
-    jeux.window_size_x = event->window.data1*SDL_GetWindowPixelDensity(jeux.sdl.window);
-    jeux.window_size_y = event->window.data2*SDL_GetWindowPixelDensity(jeux.sdl.window);
+    jeux.win_size_x = event->window.data1;
+    jeux.win_size_y = event->window.data2;
     gl_resize();
   }
 
@@ -360,12 +367,15 @@ static SDL_AppResult gl_init(void) {
           "uniform sampler2D u_tex;\n"
           "\n"
           "void main() {\n"
-          "  vec3 light_dir = normalize(vec3(1.0, 0.4, 1.0));\n"
+          /* debug normals */
+          // "  gl_FragColor = vec4(mix(vec3(1), v_normal, 0.5), 1.0);\n"
+
+          "  vec3 light_dir = normalize(vec3(1.0, 4.0, 5.9));\n"
           "  float diffuse = max(dot(v_normal, light_dir), 0.0);\n"
           "  float ramp = 0.0;\n"
-          "       if (diffuse > 0.573) ramp = 1.00;\n"
-          "  else if (diffuse > 0.077) ramp = 0.25;\n"
-          "  gl_FragColor = vec4(v_color * mix(1.0, 1.2, ramp), 1.0);\n"
+          "       if (diffuse > 0.923) ramp = 1.00;\n"
+          "  else if (diffuse > 0.477) ramp = 0.50;\n"
+          "  gl_FragColor = vec4(v_color * mix(0.8, 1.6, ramp), 1.0);\n"
           "}\n"
       },
       {
@@ -616,13 +626,16 @@ static SDL_AppResult gl_init(void) {
     }
 
     {
-      size_t vtx_count = jx_COUNT(model_vtx_Horned_Helmet);
-      size_t tri_count = jx_COUNT(model_tri_Horned_Helmet);
-      gl_geo_Vtx *vtx  =          model_vtx_Horned_Helmet;
-      gl_Tri     *tri  =          model_tri_Horned_Helmet;
+      size_t vtx_count = jx_COUNT(model_vtx_Head);
+      size_t tri_count = jx_COUNT(model_tri_Head);
+      gl_geo_Vtx *vtx  =          model_vtx_Head;
+      gl_Tri     *tri  =          model_tri_Head;
 
       jeux.gl.geo.koob_tri_count = tri_count;
 
+      /* right now this gives slightly different results to what comes out of Blender,
+       * but if we could get it working perfectly, we could cut down on asset size tremendously */
+#if 0
       /* make smooth normals for asset */
       {
         /* add the normalals of each triangle to each vert's normal */
@@ -661,6 +674,7 @@ static SDL_AppResult gl_init(void) {
           v->normal.z /= len;
         }
       }
+#endif
 
       glGenBuffers(1, &jeux.gl.geo.koob_buf_vtx);
       glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.koob_buf_vtx);
@@ -777,8 +791,17 @@ static SDL_AppResult gl_init(void) {
   return SDL_APP_CONTINUE;
 }
 
-/* recreates jeux.gl.pp.screen resources to match new jeux.window_size */
+/* recreates jeux.gl.pp.screen resources to match new jeux.win_size */
 static void gl_resize(void) {
+  jeux.screen = f4x4_ortho(
+       0.0f, jeux.win_size_x,
+       0.0f, jeux.win_size_y,
+      -1.0f, 1.0f
+  );
+
+  jeux.gl.pp.phys_win_size_x = jeux.win_size_x*SDL_GetWindowPixelDensity(jeux.sdl.window);
+  jeux.gl.pp.phys_win_size_y = jeux.win_size_y*SDL_GetWindowPixelDensity(jeux.sdl.window);
+
   /* passing in zero is ignored here, so this doesn't throw an error if screen has never inited */
   glDeleteFramebuffers(1, &jeux.gl.pp.screen.pp_fb);
   glDeleteTextures(1, &jeux.gl.pp.screen.pp_tex_color);
@@ -806,8 +829,8 @@ static void gl_resize(void) {
         /* GLenum  target         */ GL_TEXTURE_2D,
         /* GLint   level          */ 0,
         /* GLint   internalFormat */ GL_RGBA,
-        /* GLsizei width          */ jeux.window_size_x*jeux.gl.pp.fb_scale,
-        /* GLsizei height         */ jeux.window_size_y*jeux.gl.pp.fb_scale,
+        /* GLsizei width          */ jeux.gl.pp.phys_win_size_x*jeux.gl.pp.fb_scale,
+        /* GLsizei height         */ jeux.gl.pp.phys_win_size_y*jeux.gl.pp.fb_scale,
         /* GLint   border         */ 0,
         /* GLenum  format         */ GL_RGBA,
         /* GLenum  type           */ GL_UNSIGNED_BYTE,
@@ -832,8 +855,8 @@ static void gl_resize(void) {
         /* GLenum  target         */ GL_TEXTURE_2D,
         /* GLint   level          */ 0,
         /* GLint   internalFormat */ GL_DEPTH_COMPONENT24,
-        /* GLsizei width          */ jeux.window_size_x*jeux.gl.pp.fb_scale,
-        /* GLsizei height         */ jeux.window_size_y*jeux.gl.pp.fb_scale,
+        /* GLsizei width          */ jeux.gl.pp.phys_win_size_x*jeux.gl.pp.fb_scale,
+        /* GLsizei height         */ jeux.gl.pp.phys_win_size_y*jeux.gl.pp.fb_scale,
         /* GLint   border         */ 0,
         /* GLenum  format         */ GL_DEPTH_COMPONENT,
         /* GLenum  type           */ GL_UNSIGNED_INT,
@@ -900,45 +923,115 @@ static void gl_geo_reset(void) {
   jeux.gl.geo.idx_wtr = jeux.gl.geo.idx;
 }
 
-static void gl_geo_line(f2 from, f2 to, float thickness) {
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { {  0.5f,  0.5f, 0.0f }, { 200, 80, 20 } };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { {  0.5f, -0.5f, 0.0f }, { 200, 80, 20 } };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { -0.5f, -0.5f, 0.0f }, { 200, 80, 20 } };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { -0.5f,  0.5f, 0.0f }, { 200, 80, 20 } };
+static void gl_geo_line(f3 a, f3 b, float thickness) {
+  float dx = a.x - b.x;
+  float dy = a.y - b.y;
+  float dlen = dx*dx + dy*dy;
+  if (dlen <= 0) return;
+  dlen = sqrtf(dlen);
+  float nx = -dy / dlen * thickness*0.5;
+  float ny =  dx / dlen * thickness*0.5;
 
-  *jeux.gl.geo.idx_wtr++ = (gl_Tri) { 0, 1, 2 };
-  *jeux.gl.geo.idx_wtr++ = (gl_Tri) { 2, 3, 0 };
+  uint16_t start = jeux.gl.geo.vtx_wtr - jeux.gl.geo.vtx;
+
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { a.x + nx, a.y + ny, a.z }, { 200, 80, 20 } };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { a.x - nx, a.y - ny, a.z }, { 200, 80, 20 } };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { b.x + nx, b.y + ny, b.z }, { 200, 80, 20 } };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { b.x - nx, b.y - ny, b.z }, { 200, 80, 20 } };
+
+  *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
+  *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start + 2, start + 1, start + 3 };
+}
+
+static f3 jeux_world_to_screen(f3 pt) {
+  f4 p = { .p = { pt.x, pt.y, pt.z, 1.0f } };
+
+  p = f4x4_mul_f4(jeux.camera, p);
+  /* a is in -1 .. 1 now */
+  p = f4x4_mul_f4(f4x4_invert(jeux.screen), p);
+
+  return p.p3;
+}
+
+static void gl_geo_box_outline(f3 p, f3 scale, float thickness) {
+
+  for (float dir_x = 0; dir_x < 2; dir_x++) {
+    for (float dir_y = -1; dir_y <= 1; dir_y += 2) {
+      for (int axis_i = 0; axis_i < 3; axis_i++) {
+        f4 a = {0}, b = {0};
+        a.arr[axis_i] = -1;
+        b.arr[axis_i] =  1;
+
+        for (int i = 0; i < 3; i++) {
+          if (i == axis_i) continue;
+          a.arr[i] = dir_y;
+          b.arr[i] = dir_y;
+        }
+        if (dir_x) a.arr[(axis_i+1)%3] *= -1;
+        if (dir_x) b.arr[(axis_i+1)%3] *= -1;
+
+        gl_geo_line(jeux_world_to_screen(a.p3), jeux_world_to_screen(b.p3), 2.0f);
+      }
+    }
+  }
 }
 
 SDL_AppResult SDL_AppIterate(void *appstate) {
-  uint64_t ts_now = SDL_GetPerformanceCounter();
-  // double delta_time = (double)(ts_now - jeux.ts_last_frame) / (double)SDL_GetPerformanceFrequency();
-  jeux.ts_last_frame = ts_now;
+  /* timekeeping */
+  {
+    uint64_t ts_now = SDL_GetPerformanceCounter();
+    // double delta_time = (double)(ts_now - jeux.ts_last_frame) / (double)SDL_GetPerformanceFrequency();
+    jeux.ts_last_frame = ts_now;
 
-  jeux.elapsed = (double)(ts_now - jeux.ts_first) / (double)SDL_GetPerformanceFrequency();
+    jeux.elapsed = (double)(ts_now - jeux.ts_first) / (double)SDL_GetPerformanceFrequency();
+  }
+  
+  /* construct the jeux.camera for this frame */
+  {
+    /* camera */
+    jeux.camera = (f4x4) {0};
+    {
+      float ar = (float)(jeux.win_size_y) / (float)(jeux.win_size_x);
+      f4x4 projection = f4x4_ortho(
+         -5.0f     ,  5.0f     ,
+         -5.0f * ar,  5.0f * ar,
+        -20.0f     , 20.0f
+      );
 
-  gl_geo_reset();
-  gl_text_reset();
+      float x = cosf(jeux.elapsed * 0.5f);
+      float y = sinf(jeux.elapsed * 0.5f);
+      f4x4 orbit = f4x4_target_to(
+        (f3) {    x,    y, 1.2f },
+        (f3) { 0.0f, 0.0f, 0.5f },
+        (f3) { 0.0f, 0.0f, 1.0f }
+      );
+      jeux.camera = f4x4_mulf4x4(projection, f4x4_invert(orbit));
+    }
+  }
 
-  gl_geo_line(
-    (f2) { -0.5, -0.5 },
-    (f2) {  0.5,  0.5 },
-    0.1f
-  );
+  /* fill dynamic geometry buffers */
+  {
+    gl_geo_reset();
+    gl_text_reset();
 
-  if (0) gl_text_draw(
-    "hi! i'm ced?",
-    jeux.window_size_x * 0.5,
-    jeux.window_size_y * 0.5,
-    24.0f
-  );
+    gl_geo_box_outline((f3) { 0, 0, 0 },
+                       (f3) { 1, 1, 1 },
+                       2.0f);
+
+    if (0) gl_text_draw(
+      "hi! i'm ced?",
+      jeux.win_size_x * 0.5,
+      jeux.win_size_y * 0.5,
+      24.0f
+    );
+  }
 
   /* render */
   {
 
     {
       /* switch to the fb that gets postprocessing applied later */
-      glViewport(0, 0, jeux.window_size_x*jeux.gl.pp.fb_scale, jeux.window_size_y*jeux.gl.pp.fb_scale);
+      glViewport(0, 0, jeux.gl.pp.phys_win_size_x*jeux.gl.pp.fb_scale, jeux.gl.pp.phys_win_size_y*jeux.gl.pp.fb_scale);
       glBindFramebuffer(GL_FRAMEBUFFER, jeux.gl.pp.screen.pp_fb);
 
       /* clear color */
@@ -951,30 +1044,6 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
       {
         glUseProgram(jeux.gl.geo.shader);
-
-        /* camera uniform */
-        {
-          /* camera */
-          f4x4 mvp = {0};
-          {
-            float ar = (float)(jeux.window_size_y) / (float)(jeux.window_size_x);
-            f4x4 cam = f4x4_ortho(
-               -4.0f     ,  4.0f     ,
-               -4.0f * ar,  4.0f * ar,
-              -20.0f     , 20.0f
-            );
-
-            float x = cosf(jeux.elapsed * 0.5f);
-            float y = sinf(jeux.elapsed * 0.5f);
-            f4x4 orbit = f4x4_target_to(
-              (f3) {    x,    y, 0.8f },
-              (f3) { 0.0f, 0.0f, 0.0f },
-              (f3) { 0.0f, 0.0f, 1.0f }
-            );
-            mvp = f4x4_mulf4x4(cam, f4x4_invert(orbit));
-          }
-          glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, mvp.floats);
-        }
 
         /* draw dynamic, generated per-frame geo content */
         {
@@ -996,7 +1065,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
             }
           }
 
-          GEO_VTX_BIND_LAYOUT
+          GEO_VTX_BIND_LAYOUT;
+
+          glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, jeux.screen.floats);
 
           glDrawElements(GL_TRIANGLES, 3*(jeux.gl.geo.idx_wtr - jeux.gl.geo.idx), GL_UNSIGNED_SHORT, 0);
         }
@@ -1006,7 +1077,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
           glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.koob_buf_vtx);
           glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, jeux.gl.geo.koob_buf_idx);
 
-          GEO_VTX_BIND_LAYOUT
+          GEO_VTX_BIND_LAYOUT;
+
+          glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, jeux.camera.floats);
 
           glDrawElements(GL_TRIANGLES, 3 * jeux.gl.geo.koob_tri_count, GL_UNSIGNED_SHORT, 0);
         }
@@ -1016,7 +1089,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     }
 
     /* stop writing to the framebuffer, start writing to the screen */
-    glViewport(0, 0, jeux.window_size_x, jeux.window_size_y);
+    glViewport(0, 0, jeux.gl.pp.phys_win_size_x, jeux.gl.pp.phys_win_size_y);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     /* draw the contents of the framebuffer with postprocessing/aa applied */
@@ -1027,7 +1100,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       glVertexAttribPointer(jeux.gl.pp.shader_a_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
 
       glBindTexture(GL_TEXTURE_2D, jeux.gl.pp.screen.pp_tex_color);
-      glUniform2f(jeux.gl.pp.shader_u_win_size, jeux.window_size_x, jeux.window_size_y);
+      glUniform2f(jeux.gl.pp.shader_u_win_size, jeux.gl.pp.phys_win_size_x, jeux.gl.pp.phys_win_size_y);
       glDrawArrays(GL_TRIANGLES, 0, 3);
     }
 
@@ -1069,7 +1142,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
       glBindTexture(GL_TEXTURE_2D, jeux.gl.text.tex);
       glUniform2f(jeux.gl.text.shader_u_tex_size, font_TEX_SIZE_X, font_TEX_SIZE_Y);
-      glUniform2f(jeux.gl.text.shader_u_win_size, jeux.window_size_x, jeux.window_size_y);
+      glUniform2f(jeux.gl.text.shader_u_win_size, jeux.gl.pp.phys_win_size_x, jeux.gl.pp.phys_win_size_y);
       glUniform1f(jeux.gl.text.shader_u_buffer, 0.725);
 
       /* set up premultiplied alpha */
