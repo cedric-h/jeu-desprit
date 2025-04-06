@@ -11,6 +11,7 @@
 
 #include "font.h"
 
+#define BREAKPOINT() __builtin_debugtrap()
 #define jx_COUNT(arr) (sizeof(arr) / sizeof((arr)[0]))
 typedef struct { float x, y; } f2;
 typedef struct { float x, y, z; } f3;
@@ -155,10 +156,17 @@ static f4 f4x4_mul_f4(f4x4 m, f4 v) {
 #define ANTIALIAS_2xSSAA  3
 #define ANTIALIAS_4xSSAA  4
 #define CURRENT_ALIASING ANTIALIAS_4xSSAA
+#define SRGB
 
 typedef struct { float x, y, u, v, size; } gl_text_Vtx;
-typedef struct { float x, y, z; } gl_geo_Vtx;
+typedef struct {
+  struct { float x, y, z; } pos;
+  struct { uint8_t r, g, b, a; } color;
+  struct { float x, y, z; } normal;
+} gl_geo_Vtx;
 typedef struct { uint16_t a, b, c; } gl_Tri;
+
+#include "../models/include/helmet.h"
 
 static struct {
   struct {
@@ -180,8 +188,15 @@ static struct {
 
       GLuint buf_vtx;
       GLuint buf_idx;
+
+      size_t koob_tri_count;
+      GLuint koob_buf_vtx;
+      GLuint koob_buf_idx;
+
       GLuint shader;
       GLint shader_a_pos;
+      GLint shader_a_color;
+      GLint shader_a_normal;
       GLint shader_u_mvp;
     } geo;
 
@@ -198,7 +213,7 @@ static struct {
        * when the application window is resized. */
       struct {
         /* postprocessing framebuffer (anti-aliasing and other fx) */
-        GLuint pp_tex, pp_fb;
+        GLuint pp_tex_color, pp_tex_depth, pp_fb;
       } screen;
     } pp;
 
@@ -245,6 +260,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
   /* sdl init */
   {
     SDL_SetHint(SDL_HINT_APP_NAME, "jeu desprit");
+    /* rationale: Obviously ANGLE's GLES is tested the most against the EGL it provides */
+    SDL_SetHint(SDL_HINT_VIDEO_FORCE_EGL, "1");
 
     if (!SDL_Init(SDL_INIT_VIDEO)) {
       SDL_Log("SDL init failed: %s\n", SDL_GetError());
@@ -257,6 +274,9 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+
+    /* if I try to force this, it fails */
+    // SDL_GL_SetAttribute(SDL_GL_FRAMEBUFFER_SRGB_CAPABLE, 1);
 
     jeux.sdl.window = SDL_CreateWindow(
       "jeu desprit",
@@ -317,19 +337,35 @@ static SDL_AppResult gl_init(void) {
         .debug_name = "geo",
         .vs =
           "attribute vec4 a_pos;\n"
+          "attribute vec4 a_color;\n"
+          "attribute vec3 a_normal;\n"
+          "\n"
           "uniform mat4 u_mvp;\n"
+          "\n"
           "varying vec3 v_color;\n"
+          "varying vec3 v_normal;\n"
+          "\n"
           "void main() {\n"
           "  gl_Position = u_mvp * vec4(a_pos.xyz, 1.0);\n"
-          "  v_color = vec3(0);\n"
+          "  v_color  = a_color.xyz;\n"
+          "  v_normal = a_normal;\n"
           "}\n"
         ,
         .fs =
           "precision mediump float;\n"
+          "\n"
           "varying vec3 v_color;\n"
+          "varying vec3 v_normal;\n"
+          "\n"
           "uniform sampler2D u_tex;\n"
+          "\n"
           "void main() {\n"
-          "  gl_FragColor = vec4(v_color, 1.0);\n"
+          "  vec3 light_dir = normalize(vec3(1.0, 0.4, 1.0));\n"
+          "  float diffuse = max(dot(v_normal, light_dir), 0.0);\n"
+          "  float ramp = 0.0;\n"
+          "       if (diffuse > 0.573) ramp = 1.00;\n"
+          "  else if (diffuse > 0.077) ramp = 0.25;\n"
+          "  gl_FragColor = vec4(v_color * mix(1.0, 1.2, ramp), 1.0);\n"
           "}\n"
       },
       {
@@ -390,7 +426,9 @@ static SDL_AppResult gl_init(void) {
           "uniform vec2 u_win_size;\n"
           "void main() {\n"
           "  gl_FragColor = texture2D(u_tex, v_uv);\n"
+#ifdef SRGB
           "  gl_FragColor = vec4(pow(abs(gl_FragColor.xyz), vec3(1.0 / 2.2)), 1);\n"
+#endif
           "}\n"
 #elif CURRENT_ALIASING == ANTIALIAS_2xSSAA
           "precision mediump float;\n"
@@ -404,7 +442,9 @@ static SDL_AppResult gl_init(void) {
           "  gl_FragColor.xyz += 0.25*texture2D(u_tex, v_uv + (vec2(+0.25, -0.25) * inv_vp)).xyz;\n"
           "  gl_FragColor.xyz += 0.25*texture2D(u_tex, v_uv + (vec2(-0.25, +0.25) * inv_vp)).xyz;\n"
           "  gl_FragColor.xyz += 0.25*texture2D(u_tex, v_uv + (vec2(+0.25, +0.25) * inv_vp)).xyz;\n"
+#ifdef SRGB
           "  gl_FragColor = vec4(pow(abs(gl_FragColor.xyz), vec3(1.0 / 2.2)), 1);\n"
+#endif
           "}\n"
 #elif CURRENT_ALIASING == ANTIALIAS_4xSSAA
           "precision mediump float;\n"
@@ -430,7 +470,9 @@ static SDL_AppResult gl_init(void) {
           "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2( 0.375, -0.125) * inv_vp)).xyz;\n"
           "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2( 0.375,  0.125) * inv_vp)).xyz;\n"
           "  gl_FragColor.xyz += 0.0625*texture2D(u_tex, v_uv + (vec2( 0.375,  0.375) * inv_vp)).xyz;\n"
+#ifdef SRGB
           "  gl_FragColor = vec4(pow(abs(gl_FragColor.xyz), vec3(1.0 / 2.2)), 1);\n"
+#endif
           "}\n"
 #elif CURRENT_ALIASING == ANTIALIAS_FXAA
 
@@ -563,17 +605,108 @@ static SDL_AppResult gl_init(void) {
 
   /* dynamic geometry buffer */
   {
-    glGenBuffers(1, &jeux.gl.geo.buf_vtx);
-    glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.buf_vtx);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(jeux.gl.geo.vtx), NULL, GL_DYNAMIC_DRAW);
+    {
+      glGenBuffers(1, &jeux.gl.geo.buf_vtx);
+      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.buf_vtx);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(jeux.gl.geo.vtx), NULL, GL_DYNAMIC_DRAW);
 
-    glGenBuffers(1, &jeux.gl.geo.buf_idx);
-    glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.buf_idx);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(jeux.gl.geo.idx), NULL, GL_DYNAMIC_DRAW);
+      glGenBuffers(1, &jeux.gl.geo.buf_idx);
+      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.buf_idx);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(jeux.gl.geo.idx), NULL, GL_DYNAMIC_DRAW);
+    }
+
+    {
+      size_t vtx_count = jx_COUNT(model_vtx_Horned_Helmet);
+      size_t tri_count = jx_COUNT(model_tri_Horned_Helmet);
+      gl_geo_Vtx *vtx  =          model_vtx_Horned_Helmet;
+      gl_Tri     *tri  =          model_tri_Horned_Helmet;
+
+      jeux.gl.geo.koob_tri_count = tri_count;
+
+      /* make smooth normals for asset */
+      {
+        /* add the normalals of each triangle to each vert's normal */
+        for (int tri_i = 0; tri_i < tri_count; tri_i++) {
+          gl_geo_Vtx *a = vtx + tri[tri_i].a;
+          gl_geo_Vtx *b = vtx + tri[tri_i].b;
+          gl_geo_Vtx *c = vtx + tri[tri_i].c;
+          float edge0_x = b->pos.x - a->pos.x;
+          float edge0_y = b->pos.y - a->pos.y;
+          float edge0_z = b->pos.z - a->pos.z;
+          float edge1_x = c->pos.x - a->pos.x;
+          float edge1_y = c->pos.y - a->pos.y;
+          float edge1_z = c->pos.z - a->pos.z;
+          float normal_x = (edge0_y * edge1_z) - (edge0_z * edge1_y);
+          float normal_y = (edge0_z * edge1_x) - (edge0_x * edge1_z);
+          float normal_z = (edge0_x * edge1_y) - (edge0_y * edge1_x);
+          a->normal.x += normal_x;
+          a->normal.y += normal_y;
+          a->normal.z += normal_z;
+          b->normal.x += normal_x;
+          b->normal.y += normal_y;
+          b->normal.z += normal_z;
+          c->normal.x += normal_x;
+          c->normal.y += normal_y;
+          c->normal.z += normal_z;
+        }
+
+        /* normalalize the normals */
+        for (int vtx_i = 0; vtx_i < vtx_count; vtx_i++) {
+          gl_geo_Vtx *v = vtx + vtx_i;
+          float len = sqrtf(v->normal.x*v->normal.x +
+                            v->normal.y*v->normal.y +
+                            v->normal.z*v->normal.z);
+          v->normal.x /= len;
+          v->normal.y /= len;
+          v->normal.z /= len;
+        }
+      }
+
+      glGenBuffers(1, &jeux.gl.geo.koob_buf_vtx);
+      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.koob_buf_vtx);
+      glBufferData(GL_ARRAY_BUFFER, vtx_count * sizeof(gl_geo_Vtx), vtx, GL_STATIC_DRAW);
+
+      glGenBuffers(1, &jeux.gl.geo.koob_buf_idx);
+      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, jeux.gl.geo.koob_buf_idx);
+      glBufferData(GL_ELEMENT_ARRAY_BUFFER, tri_count * sizeof(gl_Tri), tri, GL_STATIC_DRAW);
+    }
 
     /* shader data layout */
-    jeux.gl.geo.shader_u_mvp = glGetUniformLocation(jeux.gl.geo.shader, "u_mvp");
-    jeux.gl.geo.shader_a_pos = glGetAttribLocation (jeux.gl.geo.shader, "a_pos");
+    jeux.gl.geo.shader_u_mvp    = glGetUniformLocation(jeux.gl.geo.shader, "u_mvp"  );
+    jeux.gl.geo.shader_a_pos    = glGetAttribLocation (jeux.gl.geo.shader, "a_pos"  );
+    jeux.gl.geo.shader_a_color  = glGetAttribLocation (jeux.gl.geo.shader, "a_color");
+    jeux.gl.geo.shader_a_normal = glGetAttribLocation (jeux.gl.geo.shader, "a_normal");
+
+#define GEO_VTX_BIND_LAYOUT { \
+      glEnableVertexAttribArray(jeux.gl.geo.shader_a_pos); \
+      glVertexAttribPointer( \
+        jeux.gl.geo.shader_a_pos, \
+        3, \
+        GL_FLOAT, \
+        GL_FALSE, \
+        sizeof(gl_geo_Vtx), \
+        (void *)offsetof(gl_geo_Vtx, pos) \
+      ); \
+      glEnableVertexAttribArray(jeux.gl.geo.shader_a_color); \
+      glVertexAttribPointer( \
+        jeux.gl.geo.shader_a_color, \
+        4, \
+        GL_UNSIGNED_BYTE, \
+        GL_TRUE, \
+        sizeof(gl_geo_Vtx), \
+        (void *)offsetof(gl_geo_Vtx, color) \
+      ); \
+      glEnableVertexAttribArray(jeux.gl.geo.shader_a_normal); \
+      glVertexAttribPointer( \
+        jeux.gl.geo.shader_a_normal, \
+        3, \
+        GL_FLOAT, \
+        GL_FALSE, \
+        sizeof(gl_geo_Vtx), \
+        (void *)offsetof(gl_geo_Vtx, normal) \
+      ); \
+    }
+
   }
 
   gl_resize();
@@ -648,48 +781,78 @@ static SDL_AppResult gl_init(void) {
 static void gl_resize(void) {
   /* passing in zero is ignored here, so this doesn't throw an error if screen has never inited */
   glDeleteFramebuffers(1, &jeux.gl.pp.screen.pp_fb);
-  glDeleteTextures(1, &jeux.gl.pp.screen.pp_tex);
+  glDeleteTextures(1, &jeux.gl.pp.screen.pp_tex_color);
 
-  /* create postprocessing framebuffer - writes to jeux.gl.pp.screen.pp_tex, jeux.gl.pp.screen.pp_fb */
+  /* create postprocessing framebuffer - writes to jeux.gl.pp.screen.pp_tex_color, jeux.gl.pp.screen.pp_fb */
   {
     glGenFramebuffers(1, &jeux.gl.pp.screen.pp_fb);
     glBindFramebuffer(GL_FRAMEBUFFER, jeux.gl.pp.screen.pp_fb);
 
-    glGenTextures(1, &jeux.gl.pp.screen.pp_tex);
-    glBindTexture(GL_TEXTURE_2D, jeux.gl.pp.screen.pp_tex);
+    /* create pp_tex_color */
+    {
+      glGenTextures(1, &jeux.gl.pp.screen.pp_tex_color);
+      glBindTexture(GL_TEXTURE_2D, jeux.gl.pp.screen.pp_tex_color);
 #if CURRENT_ALIASING == ANTIALIAS_LINEAR || CURRENT_ALIASING == ANTIALIAS_FXAA
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 #else
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 #endif
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    glTexImage2D(
-      /* GLenum  target         */ GL_TEXTURE_2D,
-      /* GLint   level          */ 0,
-      /* GLint   internalFormat */ GL_RGBA,
-      /* GLsizei width          */ jeux.window_size_x*jeux.gl.pp.fb_scale,
-      /* GLsizei height         */ jeux.window_size_y*jeux.gl.pp.fb_scale,
-      /* GLint   border         */ 0,
-      /* GLenum  format         */ GL_RGBA,
-      /* GLenum  type           */ GL_UNSIGNED_BYTE,
-      /* const void *data       */ 0
-    );
+      glTexImage2D(
+        /* GLenum  target         */ GL_TEXTURE_2D,
+        /* GLint   level          */ 0,
+        /* GLint   internalFormat */ GL_RGBA,
+        /* GLsizei width          */ jeux.window_size_x*jeux.gl.pp.fb_scale,
+        /* GLsizei height         */ jeux.window_size_y*jeux.gl.pp.fb_scale,
+        /* GLint   border         */ 0,
+        /* GLenum  format         */ GL_RGBA,
+        /* GLenum  type           */ GL_UNSIGNED_BYTE,
+        /* const void *data       */ 0
+      );
 
-    glFramebufferTexture2D(
-      GL_FRAMEBUFFER,
-      GL_COLOR_ATTACHMENT0,
-      GL_TEXTURE_2D,
-      jeux.gl.pp.screen.pp_tex,
-      0
-    );
+      glFramebufferTexture2D(
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D,
+        jeux.gl.pp.screen.pp_tex_color,
+        0
+      );
+    }
+
+    /* create pp_tex_depth */
+    {
+      glGenTextures(1, &jeux.gl.pp.screen.pp_tex_depth);
+      glBindTexture(GL_TEXTURE_2D, jeux.gl.pp.screen.pp_tex_depth);
+
+      glTexImage2D(
+        /* GLenum  target         */ GL_TEXTURE_2D,
+        /* GLint   level          */ 0,
+        /* GLint   internalFormat */ GL_DEPTH_COMPONENT24,
+        /* GLsizei width          */ jeux.window_size_x*jeux.gl.pp.fb_scale,
+        /* GLsizei height         */ jeux.window_size_y*jeux.gl.pp.fb_scale,
+        /* GLint   border         */ 0,
+        /* GLenum  format         */ GL_DEPTH_COMPONENT,
+        /* GLenum  type           */ GL_UNSIGNED_INT,
+        /* const void *data       */ 0
+      );
+
+      glFramebufferTexture2D(
+        GL_FRAMEBUFFER,
+        GL_DEPTH_ATTACHMENT,
+        GL_TEXTURE_2D,
+        jeux.gl.pp.screen.pp_tex_depth,
+        0
+      );
+
+    }
 
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     if (status != GL_FRAMEBUFFER_COMPLETE) {
-      SDL_Log("couldn't make render buffer: n%xn", status);
+      SDL_Log("couldn't make render buffer: %x", status);
     }
   }
 }
@@ -738,10 +901,10 @@ static void gl_geo_reset(void) {
 }
 
 static void gl_geo_line(f2 from, f2 to, float thickness) {
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) {  0.5f,  0.5f, 0.0f };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) {  0.5f, -0.5f, 0.0f };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { -0.5f, -0.5f, 0.0f };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { -0.5f,  0.5f, 0.0f };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { {  0.5f,  0.5f, 0.0f }, { 200, 80, 20 } };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { {  0.5f, -0.5f, 0.0f }, { 200, 80, 20 } };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { -0.5f, -0.5f, 0.0f }, { 200, 80, 20 } };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { -0.5f,  0.5f, 0.0f }, { 200, 80, 20 } };
 
   *jeux.gl.geo.idx_wtr++ = (gl_Tri) { 0, 1, 2 };
   *jeux.gl.geo.idx_wtr++ = (gl_Tri) { 2, 3, 0 };
@@ -779,54 +942,77 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       glBindFramebuffer(GL_FRAMEBUFFER, jeux.gl.pp.screen.pp_fb);
 
       /* clear color */
-      glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
-      glClear(GL_COLOR_BUFFER_BIT);
+      glClearColor(0.047f, 0.047f, 0.047f, 1.0f);
+
+      glEnable(GL_DEPTH_TEST);
+      glDepthFunc(GL_LEQUAL);
+
+      glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
       {
         glUseProgram(jeux.gl.geo.shader);
 
+        /* camera uniform */
         {
-          gl_geo_Vtx *vtx = jeux.gl.geo.vtx;
-          gl_Tri     *idx = jeux.gl.geo.idx;
-
+          /* camera */
+          f4x4 mvp = {0};
           {
-            glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.buf_vtx);
-            size_t len = jeux.gl.geo.vtx_wtr - vtx;
-            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vtx[0]) * len, vtx);
-          }
+            float ar = (float)(jeux.window_size_y) / (float)(jeux.window_size_x);
+            f4x4 cam = f4x4_ortho(
+               -4.0f     ,  4.0f     ,
+               -4.0f * ar,  4.0f * ar,
+              -20.0f     , 20.0f
+            );
 
-          {
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, jeux.gl.geo.buf_idx);
-            size_t len = jeux.gl.geo.idx_wtr - idx;
-            glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, sizeof(idx[0]) * len, idx);
+            float x = cosf(jeux.elapsed * 0.5f);
+            float y = sinf(jeux.elapsed * 0.5f);
+            f4x4 orbit = f4x4_target_to(
+              (f3) {    x,    y, 0.8f },
+              (f3) { 0.0f, 0.0f, 0.0f },
+              (f3) { 0.0f, 0.0f, 1.0f }
+            );
+            mvp = f4x4_mulf4x4(cam, f4x4_invert(orbit));
           }
+          glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, mvp.floats);
         }
 
-        glEnableVertexAttribArray(jeux.gl.geo.shader_a_pos);
-        glVertexAttribPointer(jeux.gl.geo.shader_a_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
-
-        f4x4 mvp = {0};
+        /* draw dynamic, generated per-frame geo content */
         {
-          float ar = (float)(jeux.window_size_y) / (float)(jeux.window_size_x);
-          f4x4 cam = f4x4_ortho(
-             -2.0f     ,  2.0f     ,
-             -2.0f * ar,  2.0f * ar,
-            -20.0f     , 20.0f
-          );
+          /* upload data into dynamic buffers */
+          {
+            gl_geo_Vtx *vtx = jeux.gl.geo.vtx;
+            gl_Tri     *idx = jeux.gl.geo.idx;
 
-          float x = cosf(jeux.elapsed * 0.5f);
-          float y = sinf(jeux.elapsed * 0.5f);
-          f4x4 orbit = f4x4_target_to(
-            (f3) {    x,    y, 0.8f },
-            (f3) { 0.0f, 0.0f, 0.0f },
-            (f3) { 0.0f, 0.0f, 1.0f }
-          );
-          mvp = f4x4_mulf4x4(cam, f4x4_invert(orbit));
+            {
+              glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.buf_vtx);
+              size_t len = jeux.gl.geo.vtx_wtr - vtx;
+              glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vtx[0]) * len, vtx);
+            }
+
+            {
+              glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, jeux.gl.geo.buf_idx);
+              size_t len = jeux.gl.geo.idx_wtr - idx;
+              glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, sizeof(idx[0]) * len, idx);
+            }
+          }
+
+          GEO_VTX_BIND_LAYOUT
+
+          glDrawElements(GL_TRIANGLES, 3*(jeux.gl.geo.idx_wtr - jeux.gl.geo.idx), GL_UNSIGNED_SHORT, 0);
         }
-        glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, mvp.floats);
 
-        glDrawElements(GL_TRIANGLES, 3*(jeux.gl.geo.idx_wtr - jeux.gl.geo.idx), GL_UNSIGNED_SHORT, 0);
+        /* draw static geo content */
+        {
+          glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.koob_buf_vtx);
+          glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, jeux.gl.geo.koob_buf_idx);
+
+          GEO_VTX_BIND_LAYOUT
+
+          glDrawElements(GL_TRIANGLES, 3 * jeux.gl.geo.koob_tri_count, GL_UNSIGNED_SHORT, 0);
+        }
+
       }
+
     }
 
     /* stop writing to the framebuffer, start writing to the screen */
@@ -840,7 +1026,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       glEnableVertexAttribArray(jeux.gl.pp.shader_a_pos);
       glVertexAttribPointer(jeux.gl.pp.shader_a_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
 
-      glBindTexture(GL_TEXTURE_2D, jeux.gl.pp.screen.pp_tex);
+      glBindTexture(GL_TEXTURE_2D, jeux.gl.pp.screen.pp_tex_color);
       glUniform2f(jeux.gl.pp.shader_u_win_size, jeux.window_size_x, jeux.window_size_y);
       glDrawArrays(GL_TRIANGLES, 0, 3);
     }
