@@ -227,16 +227,13 @@ typedef struct { uint16_t a, b, c; } gl_Tri;
 typedef enum {
   gl_Model_Head,
   gl_Model_HornedHelmet,
+  gl_Model_IntroGravestoneTerrain,
   gl_Model_COUNT,
 } gl_Model;
-typedef struct {
-  gl_Model model;
-  /* just a model matrix, (view or projection get applied for you) */
-  f4x4 matrix;
-} gl_ModelDraw;
 
 #include "../models/include/Head.h"
 #include "../models/include/HornedHelmet.h"
+#include "../models/include/IntroGravestoneTerrain.h"
 #include "walk.h"
 
 struct {
@@ -253,7 +250,17 @@ struct {
       .vtx = model_vtx_HornedHelmet, .vtx_count = jx_COUNT(model_vtx_HornedHelmet),
       .tri = model_tri_HornedHelmet, .tri_count = jx_COUNT(model_tri_HornedHelmet),
   },
+  [gl_Model_IntroGravestoneTerrain] = {
+      .vtx = model_vtx_IntroGravestoneTerrain, .vtx_count = jx_COUNT(model_vtx_IntroGravestoneTerrain),
+      .tri = model_tri_IntroGravestoneTerrain, .tri_count = jx_COUNT(model_tri_IntroGravestoneTerrain),
+  },
 };
+
+typedef struct {
+  gl_Model model;
+  /* just a model matrix, (view and projection get applied for you) */
+  f4x4 matrix;
+} gl_ModelDraw;
 
 static struct {
   struct {
@@ -467,7 +474,7 @@ static SDL_AppResult gl_init(void) {
           /* debug normals */
           // "  gl_FragColor = vec4(mix(vec3(1), v_normal, 0.5), 1.0);\n"
 
-          "  vec3 light_dir = normalize(vec3(4.0, 1.0, 5.9));\n"
+          "  vec3 light_dir = normalize(vec3(-4.0, -1.5, 5.9));\n"
           "  float diffuse = max(dot(v_normal, light_dir), 0.0);\n"
           "  float ramp = 0.0;\n"
           "       if (diffuse > 0.923) ramp = 1.00;\n"
@@ -1067,6 +1074,25 @@ static f3 jeux_world_to_screen(f3 p) {
   return p;
 }
 
+static void gl_geo_ring(size_t detail, f3 center, float radius, float thickness, Color color) {
+  for (int i = 0; i < detail; i++) {
+    float t0 = (float)i / (float)detail * M_PI * 2.0f;
+    float x0 = center.x + cosf(t0) * radius;
+    float y0 = center.y + sinf(t0) * radius;
+
+    float t1 = (float)(i + 1) / (float)detail * M_PI * 2.0f;
+    float x1 = center.x + cosf(t1) * radius;
+    float y1 = center.y + sinf(t1) * radius;
+
+    gl_geo_line(
+      jeux_world_to_screen((f3) { x0, y0, center.z }),
+      jeux_world_to_screen((f3) { x1, y1, center.z }),
+      thickness,
+      color
+    );
+  }
+}
+
 static void gl_geo_box_outline(f3 center, f3 scale, float thickness, Color color) {
 
   for (float dir_x = 0; dir_x < 2; dir_x++) {
@@ -1112,15 +1138,15 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     {
       float ar = (float)(jeux.win_size_y) / (float)(jeux.win_size_x);
       f4x4 projection = f4x4_ortho(
-         -5.0f     ,  5.0f     ,
-         -5.0f * ar,  5.0f * ar,
+         -7.0f     ,  7.0f     ,
+         -7.0f * ar,  7.0f * ar,
         -20.0f     , 20.0f
       );
 
-      float x = cosf(jeux.elapsed * 0.5f);
-      float y = sinf(jeux.elapsed * 0.5f);
+      float x = cosf(M_PI * -0.6f);
+      float y = sinf(M_PI * -0.6f);
       f4x4 orbit = f4x4_target_to(
-        (f3) {    x,    y, 2.2f },
+        (f3) {    x,    y, 1.8f },
         (f3) { 0.0f, 0.0f, 1.0f },
         (f3) { 0.0f, 0.0f, 1.0f }
       );
@@ -1133,12 +1159,28 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     gl_geo_reset();
     gl_text_reset();
 
+    *jeux.gl.geo.model_draws_wtr++ = (gl_ModelDraw) {
+      .model = gl_Model_IntroGravestoneTerrain,
+      .matrix = f4x4_scale(1)
+    };
+
+    gl_geo_ring(
+      32,
+      (f3) { 0.0f, 0.0f, -0.01f },
+      0.5f,
+      2.0f,
+      (Color) { 200, 100, 20, 255 }
+    );
+
+#if 0
+    /* draw player-sized box around (0, 0, 0) */
     gl_geo_box_outline(
       (f3) { 0.0f, 0.0f, 1.0f },
       (f3) { 0.3f, 0.3f, 1.0f },
       2.0f,
       (Color) { 200, 80, 20, 255 }
     );
+#endif
 
 #if 0
     /* draw a red line down the X axis, and a green line down the Y axis */
@@ -1235,7 +1277,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       glBindFramebuffer(GL_FRAMEBUFFER, jeux.gl.pp.screen.pp_fb);
 
       /* clear color */
-      glClearColor(0.047f, 0.047f, 0.047f, 1.0f);
+      glClearColor(0.027f, 0.027f, 0.047f, 1.0f);
 
       glEnable(GL_DEPTH_TEST);
       glDepthFunc(GL_LEQUAL);
