@@ -414,9 +414,14 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 
   return gl_init();
 }
+
 static void gl_resize(void);
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
   if (event->type == SDL_EVENT_QUIT) return SDL_APP_SUCCESS;
+
+  if (event->type == SDL_EVENT_MOUSE_MOTION) {
+  }
+
   if (event->type == SDL_EVENT_WINDOW_RESIZED) {
     jeux.win_size_x = event->window.data1;
     jeux.win_size_y = event->window.data2;
@@ -474,12 +479,14 @@ static SDL_AppResult gl_init(void) {
           /* debug normals */
           // "  gl_FragColor = vec4(mix(vec3(1), v_normal, 0.5), 1.0);\n"
 
-          "  vec3 light_dir = normalize(vec3(-4.0, -1.5, 5.9));\n"
+          "  vec3 light_dir = normalize(vec3(4.0, 1.5, 5.9));\n"
           "  float diffuse = max(dot(v_normal, light_dir), 0.0);\n"
           "  float ramp = 0.0;\n"
           "       if (diffuse > 0.923) ramp = 1.00;\n"
           "  else if (diffuse > 0.477) ramp = 0.50;\n"
-          "  gl_FragColor = vec4(v_color * mix(0.8, 1.6, ramp), 1.0);\n"
+          "  vec3 desaturated = vec3(dot(v_color, vec3(0.2126, 0.7152, 0.0722)));\n"
+          "  vec3 color = mix(desaturated, v_color, min(1.0, 0.2 + ramp));\n"
+          "  gl_FragColor = vec4(color * mix(0.8, 1.6, ramp), 1.0);\n"
           "}\n"
       },
       {
@@ -1168,7 +1175,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       32,
       (f3) { 0.0f, 0.0f, -0.01f },
       0.5f,
-      2.0f,
+      jeux.win_size_y * 0.004f,
       (Color) { 200, 100, 20, 255 }
     );
 
@@ -1177,7 +1184,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     gl_geo_box_outline(
       (f3) { 0.0f, 0.0f, 1.0f },
       (f3) { 0.3f, 0.3f, 1.0f },
-      2.0f,
+      jeux.win_size_y * 0.004f,
       (Color) { 200, 80, 20, 255 }
     );
 #endif
@@ -1187,14 +1194,14 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     gl_geo_line(
       jeux_world_to_screen((f3) { 0, 0, 0 }),
       jeux_world_to_screen((f3) { 1, 0, 0 }),
-      2.0f,
+      jeux.win_size_y * 0.004f,
       (Color) { 255, 0, 0, 255 }
     );
 
     gl_geo_line(
       jeux_world_to_screen((f3) { 0, 0, 0 }),
       jeux_world_to_screen((f3) { 0, 1, 0 }),
-      2.0f,
+      jeux.win_size_y * 0.004f,
       (Color) { 0, 255, 0, 255 }
     );
 #endif
@@ -1228,7 +1235,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         f3 a = jeux_world_to_screen(f4x4_transform_f3(model, joint_pos(from)));
         f3 b = jeux_world_to_screen(f4x4_transform_f3(model, joint_pos(  to)));
 
-        float thickness = 4.0f;
+        float thickness = jeux.win_size_y * 0.008f;
 
         Color color = { 1, 1, 1, 255 };
         gl_geo_line(a, b, thickness, color);
