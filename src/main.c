@@ -270,6 +270,7 @@ static struct {
 
   /* input */
   size_t win_size_x, win_size_y;
+  float mouse_screen_x, mouse_screen_y;
 
   /* timekeeping */
   uint64_t ts_last_frame, ts_first;
@@ -277,6 +278,7 @@ static struct {
 
   /* camera */
   f4x4 camera, screen;
+  f3 camera_eye;
 
   struct {
     struct {
@@ -420,6 +422,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
   if (event->type == SDL_EVENT_QUIT) return SDL_APP_SUCCESS;
 
   if (event->type == SDL_EVENT_MOUSE_MOTION) {
+    jeux.mouse_screen_x = event->motion.x;
+    jeux.mouse_screen_y = jeux.win_size_y - event->motion.y;
   }
 
   if (event->type == SDL_EVENT_WINDOW_RESIZED) {
@@ -1076,8 +1080,16 @@ static void gl_geo_line(f3 a, f3 b, float thickness, Color color) {
 
 static f3 jeux_world_to_screen(f3 p) {
   p = f4x4_transform_f3(jeux.camera, p);
-  /* a is in -1 .. 1 now */
+  /* p is in -1 .. 1 now */
   p = f4x4_transform_f3(f4x4_invert(jeux.screen), p);
+  return p;
+}
+
+static f3 jeux_screen_to_world(f3 p) {
+  /* p is in -1 .. 1 now */
+  p = f4x4_transform_f3(jeux.screen, p);
+
+  p = f4x4_transform_f3(f4x4_invert(jeux.camera), p);
   return p;
 }
 
@@ -1142,6 +1154,13 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
   {
     /* camera */
     jeux.camera = (f4x4) {0};
+
+    {
+      float x = cosf(M_PI * -0.6f);
+      float y = sinf(M_PI * -0.6f);
+      jeux.camera_eye = (f3) { x, y, 1.8f };
+    }
+
     {
       float ar = (float)(jeux.win_size_y) / (float)(jeux.win_size_x);
       f4x4 projection = f4x4_ortho(
@@ -1150,10 +1169,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         -20.0f     , 20.0f
       );
 
-      float x = cosf(M_PI * -0.6f);
-      float y = sinf(M_PI * -0.6f);
       f4x4 orbit = f4x4_target_to(
-        (f3) {    x,    y, 1.8f },
+        jeux.camera_eye,
         (f3) { 0.0f, 0.0f, 1.0f },
         (f3) { 0.0f, 0.0f, 1.0f }
       );
@@ -1171,40 +1188,125 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       .matrix = f4x4_scale(1)
     };
 
-    gl_geo_ring(
-      32,
-      (f3) { 0.0f, 0.0f, -0.01f },
-      0.5f,
-      jeux.win_size_y * 0.004f,
-      (Color) { 200, 100, 20, 255 }
-    );
+    /* debug */
+    {
+      float debug_thickness = jeux.win_size_x * 0.00225f;
+
+      /* draw an X where we think the mouse is */
+      {
+        gl_geo_line(
+          (f3) { jeux.mouse_screen_x - 10.0f, jeux.mouse_screen_y + 10.0f, 0.99f },
+          (f3) { jeux.mouse_screen_x + 10.0f, jeux.mouse_screen_y - 10.0f, 0.99f },
+          debug_thickness,
+          (Color) { 255, 0, 0, 255 }
+        );
+
+        gl_geo_line(
+          (f3) { jeux.mouse_screen_x + 10.0f, jeux.mouse_screen_y + 10.0f, 0.99f },
+          (f3) { jeux.mouse_screen_x - 10.0f, jeux.mouse_screen_y - 10.0f, 0.99f },
+          debug_thickness,
+          (Color) { 255, 0, 0, 255 }
+        );
+
+        if (0) {
+          f3 vec = jeux_screen_to_world((f3) {
+            jeux.mouse_screen_x,
+            jeux.mouse_screen_y,
+            -1.0f,
+          });
+
+          gl_geo_box_outline(
+            vec,
+            (f3) { 0.3f, 0.3f, 0.3f },
+            debug_thickness,
+            (Color) { 255, 0, 0, 255 }
+          );
+        }
+
+
+        /* cast a ray to the ground, draw a crosshair there */
+        {
+          f3 origin = jeux_screen_to_world((f3) { jeux.mouse_screen_x, jeux.mouse_screen_y,  1.0f });
+          f3 target = jeux_screen_to_world((f3) { jeux.mouse_screen_x, jeux.mouse_screen_y, -1.0f });
+
+          float ray_origin_x = origin.x;
+          float ray_origin_y = origin.y;
+          float ray_origin_z = origin.z;
+
+          float ray_vector_x = target.x - ray_origin_x;
+          float ray_vector_y = target.y - ray_origin_y;
+          float ray_vector_z = target.z - ray_origin_z;
+
+          float plane_origin_x = 0.0f;
+          float plane_origin_y = 0.0f;
+          float plane_origin_z = 0.0f;
+
+          float plane_vector_x = 0.0f;
+          float plane_vector_y = 0.0f;
+          float plane_vector_z = 1.0f;
+
+          float delta_x = plane_origin_x - ray_origin_x;
+          float delta_y = plane_origin_y - ray_origin_y;
+          float delta_z = plane_origin_z - ray_origin_z;
+
+          float ldot = delta_x*plane_vector_x +
+                       delta_y*plane_vector_y +
+                       delta_z*plane_vector_z ;
+
+          float rdot = ray_vector_x*plane_vector_x +
+                       ray_vector_y*plane_vector_y +
+                       ray_vector_z*plane_vector_z ;
+
+          float d = ldot / rdot;
+          float hit_x = ray_origin_x + ray_vector_x * d;
+          float hit_y = ray_origin_y + ray_vector_y * d;
+          float hit_z = ray_origin_z + ray_vector_z * d;
+
+          gl_geo_ring(
+            32,
+            (f3) { hit_x, hit_y, hit_z },
+            0.2f,
+            debug_thickness,
+            (Color) { 255, 0, 0, 255 }
+          );
+        }
+      }
+
+      gl_geo_ring(
+        32,
+        (f3) { 0.0f, 0.0f, -0.01f },
+        0.5f,
+        debug_thickness,
+        (Color) { 200, 100, 20, 255 }
+      );
 
 #if 0
-    /* draw player-sized box around (0, 0, 0) */
-    gl_geo_box_outline(
-      (f3) { 0.0f, 0.0f, 1.0f },
-      (f3) { 0.3f, 0.3f, 1.0f },
-      jeux.win_size_y * 0.004f,
-      (Color) { 200, 80, 20, 255 }
-    );
+      /* draw player-sized box around (0, 0, 0) */
+      gl_geo_box_outline(
+        (f3) { 0.0f, 0.0f, 1.0f },
+        (f3) { 0.3f, 0.3f, 1.0f },
+        debug_thickness,
+        (Color) { 200, 80, 20, 255 }
+      );
 #endif
 
 #if 0
-    /* draw a red line down the X axis, and a green line down the Y axis */
-    gl_geo_line(
-      jeux_world_to_screen((f3) { 0, 0, 0 }),
-      jeux_world_to_screen((f3) { 1, 0, 0 }),
-      jeux.win_size_y * 0.004f,
-      (Color) { 255, 0, 0, 255 }
-    );
+      /* draw a red line down the X axis, and a green line down the Y axis */
+      gl_geo_line(
+        jeux_world_to_screen((f3) { 0, 0, 0 }),
+        jeux_world_to_screen((f3) { 1, 0, 0 }),
+        debug_thickness,
+        (Color) { 255, 0, 0, 255 }
+      );
 
-    gl_geo_line(
-      jeux_world_to_screen((f3) { 0, 0, 0 }),
-      jeux_world_to_screen((f3) { 0, 1, 0 }),
-      jeux.win_size_y * 0.004f,
-      (Color) { 0, 255, 0, 255 }
-    );
+      gl_geo_line(
+        jeux_world_to_screen((f3) { 0, 0, 0 }),
+        jeux_world_to_screen((f3) { 0, 1, 0 }),
+        debug_thickness,
+        (Color) { 0, 255, 0, 255 }
+      );
 #endif
+    }
 
     /* draw figure */
     {
@@ -1235,7 +1337,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         f3 a = jeux_world_to_screen(f4x4_transform_f3(model, joint_pos(from)));
         f3 b = jeux_world_to_screen(f4x4_transform_f3(model, joint_pos(  to)));
 
-        float thickness = jeux.win_size_y * 0.008f;
+        float thickness = jeux.win_size_x * 0.005f;
 
         Color color = { 1, 1, 1, 255 };
         gl_geo_line(a, b, thickness, color);
