@@ -149,36 +149,61 @@ static f4x4 f4x4_mul_f4x4(f4x4 a, f4x4 b) {
 }
 
 static f4 f4x4_mul_f4(f4x4 m, f4 v) {
-    f4 res;
-    for (int x = 0; x < 4; x++) {
-        float sum = 0;
-        for (int y = 0; y < 4; y++)
-            sum += m.arr[y][x] * v.arr[y];
+  f4 res = {0};
+  for (int x = 0; x < 4; x++) {
+    float sum = 0;
+    for (int y = 0; y < 4; y++)
+      sum += m.arr[y][x] * v.arr[y];
 
-        res.arr[x] = sum;
-    }
-    return res;
+    res.arr[x] = sum;
+  }
+  return res;
+}
+
+static f3 f4x4_transform_f3(f4x4 m, f3 v) {
+  f4 res = { .p3 = v };
+  res.p.w = 1.0f;
+  res = f4x4_mul_f4(m, res);
+  res.p.x /= res.p.w;
+  res.p.y /= res.p.w;
+  res.p.z /= res.p.w;
+  return res.p3;
 }
 
 static f4x4 f4x4_scale(float scale) {
-    f4x4 res = {0};
-    res.arr[0][0] = scale;
-    res.arr[1][1] = scale;
-    res.arr[2][2] = scale;
-    res.arr[3][3] = 1.0f;
-    return res;
+  f4x4 res = {0};
+  res.arr[0][0] = scale;
+  res.arr[1][1] = scale;
+  res.arr[2][2] = scale;
+  res.arr[3][3] = 1.0f;
+  return res;
+}
+
+/* 2D rotation around the Z axis */
+static f4x4 f4x4_turn(float radians) {
+  f4x4 res = {0};
+
+  res.arr[0][0] = cosf(radians);
+  res.arr[0][1] = sinf(radians);
+
+  res.arr[1][0] = -res.arr[0][1];
+  res.arr[1][1] =  res.arr[0][0];
+
+  res.arr[2][2] = 1.0f;
+  res.arr[3][3] = 1.0f;
+  return res;
 }
 
 static f4x4 f4x4_move(f3 pos) {
-    f4x4 res = {0};
-    res.arr[0][0] = 1.0f;
-    res.arr[1][1] = 1.0f;
-    res.arr[2][2] = 1.0f;
-    res.arr[3][0] = pos.x;
-    res.arr[3][1] = pos.y;
-    res.arr[3][2] = pos.z;
-    res.arr[3][3] = 1.0f;
-    return res;
+  f4x4 res = {0};
+  res.arr[0][0] = 1.0f;
+  res.arr[1][1] = 1.0f;
+  res.arr[2][2] = 1.0f;
+  res.arr[3][0] = pos.x;
+  res.arr[3][1] = pos.y;
+  res.arr[3][2] = pos.z;
+  res.arr[3][3] = 1.0f;
+  return res;
 }
 
 
@@ -199,13 +224,36 @@ typedef struct {
 } gl_geo_Vtx;
 typedef struct { uint16_t a, b, c; } gl_Tri;
 
+typedef enum {
+  gl_Model_Head,
+  gl_Model_HornedHelmet,
+  gl_Model_COUNT,
+} gl_Model;
 typedef struct {
-  f3 pos;
-  float scale;
+  gl_Model model;
+  /* just a model matrix, (view or projection get applied for you) */
+  f4x4 matrix;
 } gl_ModelDraw;
 
-#include "../models/include/head.h"
+#include "../models/include/Head.h"
+#include "../models/include/HornedHelmet.h"
 #include "walk.h"
+
+struct {
+  gl_geo_Vtx *vtx;
+  gl_Tri *tri;
+  size_t vtx_count;
+  size_t tri_count;
+} gl_modeldata[gl_Model_COUNT] = {
+  [gl_Model_Head] = {
+      .vtx = model_vtx_Head, .vtx_count = jx_COUNT(model_vtx_Head),
+      .tri = model_tri_Head, .tri_count = jx_COUNT(model_tri_Head),
+  },
+  [gl_Model_HornedHelmet] = {
+      .vtx = model_vtx_HornedHelmet, .vtx_count = jx_COUNT(model_vtx_HornedHelmet),
+      .tri = model_tri_HornedHelmet, .tri_count = jx_COUNT(model_tri_HornedHelmet),
+  },
+};
 
 static struct {
   struct {
@@ -238,13 +286,15 @@ static struct {
        * directly into their buffers and subsequently rendered in a single call.
        *
        * Static geometry (models made in Blender), rather than being drawn directly,
-       * is requested to be drawn through the model_draws queue. This allows us to
+       * are requested to be drawn through the model_draws queue. This allows us to
        * handle instancing, sorting etc. in a pass immediately before rendering. */
       gl_ModelDraw  model_draws[999];
       gl_ModelDraw* model_draws_wtr;
-      size_t koob_tri_count;
-      GLuint koob_buf_vtx;
-      GLuint koob_buf_idx;
+      struct {
+        GLuint buf_vtx;
+        GLuint buf_idx;
+        size_t tri_count;
+      } static_models[gl_Model_COUNT];
 
       GLuint shader;
       GLint shader_a_pos;
@@ -672,16 +722,18 @@ static SDL_AppResult gl_init(void) {
       glBufferData(GL_ARRAY_BUFFER, sizeof(jeux.gl.geo.idx), NULL, GL_DYNAMIC_DRAW);
     }
 
-    {
-      size_t vtx_count = jx_COUNT(model_vtx_Head);
-      size_t tri_count = jx_COUNT(model_tri_Head);
-      gl_geo_Vtx *vtx  =          model_vtx_Head;
-      gl_Tri     *tri  =          model_tri_Head;
+    for (size_t i = 0; i < gl_Model_COUNT; i++) {
+      size_t vtx_count = gl_modeldata[i].vtx_count;
+      size_t tri_count = gl_modeldata[i].tri_count;
+      gl_geo_Vtx *vtx  = gl_modeldata[i].vtx;
+      gl_Tri     *tri  = gl_modeldata[i].tri;
 
-      jeux.gl.geo.koob_tri_count = tri_count;
+      jeux.gl.geo.static_models[i].tri_count = tri_count;
 
       /* right now this gives slightly different results to what comes out of Blender,
-       * but if we could get it working perfectly, we could cut down on asset size tremendously */
+       * but if we could get it working perfectly, we could cut down on asset size tremendously
+       *
+       * EDIT: this might be fine to use; the bad normals were an asset authoring issue */
 #if 0
       /* make smooth normals for asset */
       {
@@ -723,12 +775,12 @@ static SDL_AppResult gl_init(void) {
       }
 #endif
 
-      glGenBuffers(1, &jeux.gl.geo.koob_buf_vtx);
-      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.koob_buf_vtx);
+      glGenBuffers(1, &jeux.gl.geo.static_models[i].buf_vtx);
+      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.static_models[i].buf_vtx);
       glBufferData(GL_ARRAY_BUFFER, vtx_count * sizeof(gl_geo_Vtx), vtx, GL_STATIC_DRAW);
 
-      glGenBuffers(1, &jeux.gl.geo.koob_buf_idx);
-      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, jeux.gl.geo.koob_buf_idx);
+      glGenBuffers(1, &jeux.gl.geo.static_models[i].buf_idx);
+      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, jeux.gl.geo.static_models[i].buf_idx);
       glBufferData(GL_ELEMENT_ARRAY_BUFFER, tri_count * sizeof(gl_Tri), tri, GL_STATIC_DRAW);
     }
 
@@ -1008,14 +1060,11 @@ static void gl_geo_line(f3 a, f3 b, float thickness, Color color) {
   *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start + 2, start + 1, start + 3 };
 }
 
-static f3 jeux_world_to_screen(f3 pt) {
-  f4 p = { .p = { pt.x, pt.y, pt.z, 1.0f } };
-
-  p = f4x4_mul_f4(jeux.camera, p);
+static f3 jeux_world_to_screen(f3 p) {
+  p = f4x4_transform_f3(jeux.camera, p);
   /* a is in -1 .. 1 now */
-  p = f4x4_mul_f4(f4x4_invert(jeux.screen), p);
-
-  return p.p3;
+  p = f4x4_transform_f3(f4x4_invert(jeux.screen), p);
+  return p;
 }
 
 static void gl_geo_box_outline(f3 center, f3 scale, float thickness, Color color) {
@@ -1091,8 +1140,27 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       (Color) { 200, 80, 20, 255 }
     );
 
+#if 0
+    /* draw a red line down the X axis, and a green line down the Y axis */
+    gl_geo_line(
+      jeux_world_to_screen((f3) { 0, 0, 0 }),
+      jeux_world_to_screen((f3) { 1, 0, 0 }),
+      2.0f,
+      (Color) { 255, 0, 0, 255 }
+    );
+
+    gl_geo_line(
+      jeux_world_to_screen((f3) { 0, 0, 0 }),
+      jeux_world_to_screen((f3) { 0, 1, 0 }),
+      2.0f,
+      (Color) { 0, 255, 0, 255 }
+    );
+#endif
+
     /* draw figure */
     {
+      f4x4 model = f4x4_scale(1.0f);
+
       float t = fmodf(jeux.elapsed, animdata_duration);
 
       size_t rhs_frame = -1;
@@ -1115,8 +1183,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       for (int i = 0; i < jx_COUNT(animdata_limb_connections); i++) {
         animdata_JointKey_t from = animdata_limb_connections[i].from,
                               to = animdata_limb_connections[i].to;
-        f3 a = jeux_world_to_screen(joint_pos(from));
-        f3 b = jeux_world_to_screen(joint_pos(  to));
+        f3 a = jeux_world_to_screen(f4x4_transform_f3(model, joint_pos(from)));
+        f3 b = jeux_world_to_screen(f4x4_transform_f3(model, joint_pos(  to)));
 
         float thickness = 4.0f;
 
@@ -1137,10 +1205,14 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         /* if this is 0.8f, a perfectly (0, 0, 1) aligned neck will penetrate 20% */
         head.z += radius*0.8f;
 
-        *jeux.gl.geo.model_draws_wtr++ = (gl_ModelDraw) {
-          .pos = head,
-          .scale = radius
-        };
+        f4x4 matrix = model;
+        matrix = f4x4_mul_f4x4(matrix, f4x4_move(head));
+        /* the animations seem to be exported with the negative X axis as "forward," so ... */
+        matrix = f4x4_mul_f4x4(matrix, f4x4_turn(M_PI * -0.5f));
+        matrix = f4x4_mul_f4x4(matrix, f4x4_scale(radius));
+
+        *jeux.gl.geo.model_draws_wtr++ = (gl_ModelDraw) { .model = gl_Model_Head, .matrix = matrix };
+        *jeux.gl.geo.model_draws_wtr++ = (gl_ModelDraw) { .model = gl_Model_HornedHelmet, .matrix = matrix };
       }
 
 #undef joint_pos
@@ -1205,17 +1277,17 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         for (int i = 0; i < models_to_draw; i++) {
           gl_ModelDraw *draw = jeux.gl.geo.model_draws + i;
 
-          glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.koob_buf_vtx);
-          glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, jeux.gl.geo.koob_buf_idx);
+          glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.static_models[draw->model].buf_vtx);
+          glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, jeux.gl.geo.static_models[draw->model].buf_idx);
+          size_t tri_count = jeux.gl.geo.static_models[draw->model].tri_count;
 
           GEO_VTX_BIND_LAYOUT;
 
           f4x4 mvp = jeux.camera;
-          mvp = f4x4_mul_f4x4(mvp, f4x4_move(draw->pos));
-          mvp = f4x4_mul_f4x4(mvp, f4x4_scale(draw->scale));
+          mvp = f4x4_mul_f4x4(mvp, draw->matrix);
           glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, mvp.floats);
 
-          glDrawElements(GL_TRIANGLES, 3 * jeux.gl.geo.koob_tri_count, GL_UNSIGNED_SHORT, 0);
+          glDrawElements(GL_TRIANGLES, 3 * tri_count, GL_UNSIGNED_SHORT, 0);
         }
 
       }
