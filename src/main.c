@@ -28,6 +28,27 @@ static f3 lerp3(f3 a, f3 b, float t) {
   };
 }
 
+static f3 ray_hit_plane(f3 ray_origin, f3 ray_vector, f3 plane_origin, f3 plane_vector) {
+  float delta_x = plane_origin.x - ray_origin.x;
+  float delta_y = plane_origin.y - ray_origin.y;
+  float delta_z = plane_origin.z - ray_origin.z;
+
+  float ldot = delta_x*plane_vector.x +
+               delta_y*plane_vector.y +
+               delta_z*plane_vector.z ;
+
+  float rdot = ray_vector.x*plane_vector.x +
+               ray_vector.y*plane_vector.y +
+               ray_vector.z*plane_vector.z ;
+
+  float d = ldot / rdot;
+  return (f3) {
+    ray_origin.x + ray_vector.x * d,
+    ray_origin.y + ray_vector.y * d,
+    ray_origin.z + ray_vector.z * d,
+  };
+}
+
 static f4x4 f4x4_ortho(float left, float right, float bottom, float top, float near, float far) {
     f4x4 res = {0};
 
@@ -1228,43 +1249,13 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         {
           f3 origin = jeux_screen_to_world((f3) { jeux.mouse_screen_x, jeux.mouse_screen_y,  1.0f });
           f3 target = jeux_screen_to_world((f3) { jeux.mouse_screen_x, jeux.mouse_screen_y, -1.0f });
+          f3 ray_vector = { target.x - origin.x, target.y - origin.y, target.z - origin.z };
 
-          float ray_origin_x = origin.x;
-          float ray_origin_y = origin.y;
-          float ray_origin_z = origin.z;
-
-          float ray_vector_x = target.x - ray_origin_x;
-          float ray_vector_y = target.y - ray_origin_y;
-          float ray_vector_z = target.z - ray_origin_z;
-
-          float plane_origin_x = 0.0f;
-          float plane_origin_y = 0.0f;
-          float plane_origin_z = 0.0f;
-
-          float plane_vector_x = 0.0f;
-          float plane_vector_y = 0.0f;
-          float plane_vector_z = 1.0f;
-
-          float delta_x = plane_origin_x - ray_origin_x;
-          float delta_y = plane_origin_y - ray_origin_y;
-          float delta_z = plane_origin_z - ray_origin_z;
-
-          float ldot = delta_x*plane_vector_x +
-                       delta_y*plane_vector_y +
-                       delta_z*plane_vector_z ;
-
-          float rdot = ray_vector_x*plane_vector_x +
-                       ray_vector_y*plane_vector_y +
-                       ray_vector_z*plane_vector_z ;
-
-          float d = ldot / rdot;
-          float hit_x = ray_origin_x + ray_vector_x * d;
-          float hit_y = ray_origin_y + ray_vector_y * d;
-          float hit_z = ray_origin_z + ray_vector_z * d;
+          f3 hit = ray_hit_plane(origin, ray_vector, (f3) { 0 }, (f3) { 0, 0, 1 });
 
           gl_geo_ring(
             32,
-            (f3) { hit_x, hit_y, hit_z },
+            hit,
             0.2f,
             debug_thickness,
             (Color) { 255, 0, 0, 255 }
@@ -1311,6 +1302,17 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     /* draw figure */
     {
       f4x4 model = f4x4_scale(1.0f);
+
+      /* rotate towards mouse */
+      {
+          f3 origin = jeux_screen_to_world((f3) { jeux.mouse_screen_x, jeux.mouse_screen_y,  1.0f });
+          f3 target = jeux_screen_to_world((f3) { jeux.mouse_screen_x, jeux.mouse_screen_y, -1.0f });
+          f3 ray_vector = { target.x - origin.x, target.y - origin.y, target.z - origin.z };
+
+          f3 hit = ray_hit_plane(origin, ray_vector, (f3) { 0 }, (f3) { 0, 0, 1 });
+
+          model = f4x4_mul_f4x4(model, f4x4_turn(atan2f(hit.y - 0, hit.x - 0) + (M_PI * 0.5f)));
+      }
 
       float t = fmodf(jeux.elapsed, animdata_duration);
 
