@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 #include <stddef.h>
+#define _USE_MATH_DEFINES
 #include <math.h>
 
 #include <SDL3/SDL.h>
@@ -9,7 +10,9 @@
 #include <SDL3/SDL_main.h>
 #include "gl_include/gles3.h"
 
+#define CLAY_IMPLEMENTATION
 #include "clay.h"
+#include "clay_demo.h"
 #include "font.h"
 
 #define BREAKPOINT() __builtin_debugtrap()
@@ -253,7 +256,7 @@ typedef enum {
   gl_Model_COUNT,
 } gl_Model;
 
-#include "../models/include/Head.h"
+#include "../models/include/head.h"
 #include "../models/include/HornedHelmet.h"
 #include "../models/include/IntroGravestoneTerrain.h"
 #include "walk.h"
@@ -359,10 +362,10 @@ static struct {
     } pp;
 
     struct {
-      gl_text_Vtx vtx[999];
+      gl_text_Vtx vtx[99999];
       gl_text_Vtx *vtx_wtr;
 
-      gl_Tri idx[999];
+      gl_Tri idx[99999];
       gl_Tri *idx_wtr;
 
       GLuint buf_vtx;
@@ -381,6 +384,11 @@ static struct {
     } text;
 
   } gl;
+
+  struct {
+    ClayVideoDemo_Data demo_data;
+  } gui;
+
 } jeux = {
   .win_size_x = 800,
   .win_size_y = 450,
@@ -396,6 +404,24 @@ static struct {
 };
 
 static SDL_AppResult gl_init(void);
+static void gui_handle_errors(Clay_ErrorData error_data) { SDL_Log("%s", error_data.errorText.chars); }
+static Clay_Dimensions gui_measure_text(Clay_StringSlice text, Clay_TextElementConfig *config, void *userData) {
+  float size = font_BASE_CHAR_SIZE;
+  size *= SDL_GetWindowPixelDensity(jeux.sdl.window);
+  float scale = (size / font_BASE_CHAR_SIZE);
+
+  float size_x = 0;
+  float size_y = 0;
+  for (int i = 0; i < text.length; i++) {
+    char c = text.chars[i];
+    font_LetterRegion *l = &font_letter_regions[(size_t)(c)];
+
+    size_x += l->advance * scale;
+    size_y = fmaxf(size_y, l->size_y * scale);
+  }
+
+  return (Clay_Dimensions) { size_x, size_y };
+}
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 
   /* sdl init */
@@ -440,6 +466,21 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
   jeux.ts_last_frame = SDL_GetPerformanceCounter();
   jeux.ts_first = SDL_GetPerformanceCounter();
 
+  /* gui init */
+  {
+    Clay_Initialize(
+      (Clay_Arena) {
+        .memory = SDL_malloc(Clay_MinMemorySize()),
+        .capacity = Clay_MinMemorySize()
+      },
+      (Clay_Dimensions) { jeux.win_size_x, jeux.win_size_y },
+      (Clay_ErrorHandler) { gui_handle_errors }
+    );
+    Clay_SetMeasureTextFunction(gui_measure_text, NULL);
+
+    jeux.gui.demo_data = ClayVideoDemo_Initialize();
+  }
+
   return gl_init();
 }
 
@@ -457,6 +498,38 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     jeux.win_size_y = event->window.data2;
     gl_resize();
   }
+
+  /* clay event handling */
+  switch (event->type) {
+
+    case SDL_EVENT_WINDOW_RESIZED: {
+      Clay_SetLayoutDimensions(
+        (Clay_Dimensions) { (float) event->window.data1, (float) event->window.data2 }
+      );
+    } break;
+
+    case SDL_EVENT_MOUSE_MOTION: {
+      Clay_SetPointerState(
+        (Clay_Vector2) { event->motion.x, event->motion.y },
+        event->motion.state & SDL_BUTTON_LMASK
+      );
+    } break;
+
+    case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+      Clay_SetPointerState(
+        (Clay_Vector2) { event->button.x, event->button.y },
+        event->button.button == SDL_BUTTON_LEFT
+      );
+    } break;
+
+    case SDL_EVENT_MOUSE_WHEEL: {
+      Clay_UpdateScrollContainers(true, (Clay_Vector2) { event->wheel.x, event->wheel.y }, 0.01f);
+    } break;
+
+    default: {
+    } break;
+
+  };
 
   return SDL_APP_CONTINUE;
 }
@@ -715,7 +788,7 @@ static SDL_AppResult gl_init(void) {
           GLint log_length;
           glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &log_length);
           if (log_length > 0) {
-            char *log = malloc(log_length);
+            char *log = SDL_malloc(log_length);
             glGetShaderInfoLog(shader, log_length, &log_length, log);
             SDL_Log(
               "\n\n%s %s compilation failed:\n\n%s\n",
@@ -1166,6 +1239,134 @@ static void gl_geo_box_outline(f3 center, f3 scale, float thickness, Color color
   }
 }
 
+static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
+    for (size_t i = 0; i < rcommands->length; i++) {
+        Clay_RenderCommand *rcmd = Clay_RenderCommandArray_Get(rcommands, i);
+        Clay_BoundingBox rect = rcmd->boundingBox;
+
+        switch (rcmd->commandType) {
+
+            case CLAY_RENDER_COMMAND_TYPE_RECTANGLE: {
+                // Clay_RectangleRenderData *config = &rcmd->renderData.rectangle;
+
+
+                // SDL_SetRenderDrawBlendMode(rendererData->renderer, SDL_BLENDMODE_BLEND);
+                // SDL_SetRenderDrawColor(rendererData->renderer, config->backgroundColor.r, config->backgroundColor.g, config->backgroundColor.b, config->backgroundColor.a);
+                // if (config->cornerRadius.topLeft > 0) {
+                //     SDL_Clay_RenderFillRoundedRect(rendererData, rect, config->cornerRadius.topLeft, config->backgroundColor);
+                // } else {
+                //     SDL_RenderFillRect(rendererData->renderer, &rect);
+                // }
+            } break;
+
+            case CLAY_RENDER_COMMAND_TYPE_TEXT: {
+                Clay_TextRenderData *config = &rcmd->renderData.text;
+                gl_text_draw(config->stringContents.chars, rect.x, rect.y, 24.0f);
+
+                // TTF_Font *font = rendererData->fonts[config->fontId];
+                // TTF_Text *text = TTF_CreateText(rendererData->textEngine, font, config->stringContents.chars, config->stringContents.length);
+                // TTF_SetTextColor(text, config->textColor.r, config->textColor.g, config->textColor.b, config->textColor.a);
+                // TTF_DrawRendererText(text, rect.x, rect.y);
+                // TTF_DestroyText(text);
+            } break;
+
+            case CLAY_RENDER_COMMAND_TYPE_BORDER: {
+                // Clay_BorderRenderData *config = &rcmd->renderData.border;
+
+                // const float minRadius = SDL_min(rect.w, rect.h) / 2.0f;
+                // const Clay_CornerRadius clampedRadii = {
+                //     .topLeft = SDL_min(config->cornerRadius.topLeft, minRadius),
+                //     .topRight = SDL_min(config->cornerRadius.topRight, minRadius),
+                //     .bottomLeft = SDL_min(config->cornerRadius.bottomLeft, minRadius),
+                //     .bottomRight = SDL_min(config->cornerRadius.bottomRight, minRadius)
+                // };
+                // //edges
+                // SDL_SetRenderDrawColor(rendererData->renderer, config->color.r, config->color.g, config->color.b, config->color.a);
+                // if (config->width.left > 0) {
+                //     const float starting_y = rect.y + clampedRadii.topLeft;
+                //     const float length = rect.h - clampedRadii.topLeft - clampedRadii.bottomLeft;
+                //     SDL_FRect line = { rect.x, starting_y, config->width.left, length };
+                //     SDL_RenderFillRect(rendererData->renderer, &line);
+                // }
+                // if (config->width.right > 0) {
+                //     const float starting_x = rect.x + rect.w - (float)config->width.right;
+                //     const float starting_y = rect.y + clampedRadii.topRight;
+                //     const float length = rect.h - clampedRadii.topRight - clampedRadii.bottomRight;
+                //     SDL_FRect line = { starting_x, starting_y, config->width.right, length };
+                //     SDL_RenderFillRect(rendererData->renderer, &line);
+                // }
+                // if (config->width.top > 0) {
+                //     const float starting_x = rect.x + clampedRadii.topLeft;
+                //     const float length = rect.w - clampedRadii.topLeft - clampedRadii.topRight;
+                //     SDL_FRect line = { starting_x, rect.y, length, config->width.top };
+                //     SDL_RenderFillRect(rendererData->renderer, &line);
+                // }
+                // if (config->width.bottom > 0) {
+                //     const float starting_x = rect.x + clampedRadii.bottomLeft;
+                //     const float starting_y = rect.y + rect.h - (float)config->width.bottom;
+                //     const float length = rect.w - clampedRadii.bottomLeft - clampedRadii.bottomRight;
+                //     SDL_FRect line = { starting_x, starting_y, length, config->width.bottom };
+                //     SDL_SetRenderDrawColor(rendererData->renderer, config->color.r, config->color.g, config->color.b, config->color.a);
+                //     SDL_RenderFillRect(rendererData->renderer, &line);
+                // }
+                // //corners
+                // if (config->cornerRadius.topLeft > 0) {
+                //     const float centerX = rect.x + clampedRadii.topLeft -1;
+                //     const float centerY = rect.y + clampedRadii.topLeft;
+                //     SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.topLeft,
+                //         180.0f, 270.0f, config->width.top, config->color);
+                // }
+                // if (config->cornerRadius.topRight > 0) {
+                //     const float centerX = rect.x + rect.w - clampedRadii.topRight -1;
+                //     const float centerY = rect.y + clampedRadii.topRight;
+                //     SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.topRight,
+                //         270.0f, 360.0f, config->width.top, config->color);
+                // }
+                // if (config->cornerRadius.bottomLeft > 0) {
+                //     const float centerX = rect.x + clampedRadii.bottomLeft -1;
+                //     const float centerY = rect.y + rect.h - clampedRadii.bottomLeft -1;
+                //     SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.bottomLeft,
+                //         90.0f, 180.0f, config->width.bottom, config->color);
+                // }
+                // if (config->cornerRadius.bottomRight > 0) {
+                //     const float centerX = rect.x + rect.w - clampedRadii.bottomRight -1; //TODO: why need to -1 in all calculations???
+                //     const float centerY = rect.y + rect.h - clampedRadii.bottomRight -1;
+                //     SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.bottomRight,
+                //         0.0f, 90.0f, config->width.bottom, config->color);
+                // }
+
+            } break;
+
+            case CLAY_RENDER_COMMAND_TYPE_SCISSOR_START: {
+                //Clay_BoundingBox boundingBox = rcmd->boundingBox;
+                //currentClippingRectangle = (SDL_Rect) {
+                //        .x = boundingBox.x,
+                //        .y = boundingBox.y,
+                //        .w = boundingBox.width,
+                //        .h = boundingBox.height,
+                //};
+                //SDL_SetRenderClipRect(rendererData->renderer, &currentClippingRectangle);
+            } break;
+
+            case CLAY_RENDER_COMMAND_TYPE_SCISSOR_END: {
+                // SDL_SetRenderClipRect(rendererData->renderer, NULL);
+            } break;
+
+            case CLAY_RENDER_COMMAND_TYPE_IMAGE: {
+                // SDL_Surface *image = (SDL_Surface *)rcmd->renderData.image.imageData;
+                // SDL_Texture *texture = SDL_CreateTextureFromSurface(rendererData->renderer, image);
+                // const SDL_FRect dest = { rect.x, rect.y, rect.w, rect.h };
+
+                // SDL_RenderTexture(rendererData->renderer, texture, NULL, &dest);
+                // SDL_DestroyTexture(texture);
+            } break;
+
+            default:
+                SDL_Log("Unknown render command type: %d", rcmd->commandType);
+        }
+    }
+}
+
 SDL_AppResult SDL_AppIterate(void *appstate) {
   /* timekeeping */
   {
@@ -1220,10 +1421,17 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     gl_geo_reset();
     gl_text_reset();
 
+    /* draw terrain! */
     *jeux.gl.geo.model_draws_wtr++ = (gl_ModelDraw) {
       .model = gl_Model_IntroGravestoneTerrain,
       .matrix = f4x4_scale(1)
     };
+
+    /* ui */
+    {
+      // Clay_RenderCommandArray cmds = ClayVideoDemo_CreateLayout(&jeux.gui.demo_data);
+      // gl_draw_clay_commands(&cmds);
+    }
 
     /* debug */
     {
@@ -1365,7 +1573,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 #undef joint_pos
     }
 
-    if (0) gl_text_draw(
+    if (1) gl_text_draw(
       "hi! i'm ced?",
       jeux.win_size_x * 0.5,
       jeux.win_size_y * 0.5,
@@ -1512,134 +1720,4 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
   SDL_GL_SwapWindow(jeux.sdl.window);
   return SDL_APP_CONTINUE;
-}
-
-static void gl_draw_clay_commands(
-  Clay_RenderCommandArray *rcommands
-) {
-    for (size_t i = 0; i < rcommands->length; i++) {
-        Clay_RenderCommand *rcmd = Clay_RenderCommandArray_Get(rcommands, i);
-        Clay_BoundingBox rect = rcmd->boundingBox;
-
-        switch (rcmd->commandType) {
-
-            case CLAY_RENDER_COMMAND_TYPE_RECTANGLE: {
-                // Clay_RectangleRenderData *config = &rcmd->renderData.rectangle;
-
-
-                // SDL_SetRenderDrawBlendMode(rendererData->renderer, SDL_BLENDMODE_BLEND);
-                // SDL_SetRenderDrawColor(rendererData->renderer, config->backgroundColor.r, config->backgroundColor.g, config->backgroundColor.b, config->backgroundColor.a);
-                // if (config->cornerRadius.topLeft > 0) {
-                //     SDL_Clay_RenderFillRoundedRect(rendererData, rect, config->cornerRadius.topLeft, config->backgroundColor);
-                // } else {
-                //     SDL_RenderFillRect(rendererData->renderer, &rect);
-                // }
-            } break;
-
-            case CLAY_RENDER_COMMAND_TYPE_TEXT: {
-                Clay_TextRenderData *config = &rcmd->renderData.text;
-                gl_text_draw(config->stringContents.chars, rect.x, rect.y, 24.0f);
-
-                // TTF_Font *font = rendererData->fonts[config->fontId];
-                // TTF_Text *text = TTF_CreateText(rendererData->textEngine, font, config->stringContents.chars, config->stringContents.length);
-                // TTF_SetTextColor(text, config->textColor.r, config->textColor.g, config->textColor.b, config->textColor.a);
-                // TTF_DrawRendererText(text, rect.x, rect.y);
-                // TTF_DestroyText(text);
-            } break;
-
-            case CLAY_RENDER_COMMAND_TYPE_BORDER: {
-                // Clay_BorderRenderData *config = &rcmd->renderData.border;
-
-                // const float minRadius = SDL_min(rect.w, rect.h) / 2.0f;
-                // const Clay_CornerRadius clampedRadii = {
-                //     .topLeft = SDL_min(config->cornerRadius.topLeft, minRadius),
-                //     .topRight = SDL_min(config->cornerRadius.topRight, minRadius),
-                //     .bottomLeft = SDL_min(config->cornerRadius.bottomLeft, minRadius),
-                //     .bottomRight = SDL_min(config->cornerRadius.bottomRight, minRadius)
-                // };
-                // //edges
-                // SDL_SetRenderDrawColor(rendererData->renderer, config->color.r, config->color.g, config->color.b, config->color.a);
-                // if (config->width.left > 0) {
-                //     const float starting_y = rect.y + clampedRadii.topLeft;
-                //     const float length = rect.h - clampedRadii.topLeft - clampedRadii.bottomLeft;
-                //     SDL_FRect line = { rect.x, starting_y, config->width.left, length };
-                //     SDL_RenderFillRect(rendererData->renderer, &line);
-                // }
-                // if (config->width.right > 0) {
-                //     const float starting_x = rect.x + rect.w - (float)config->width.right;
-                //     const float starting_y = rect.y + clampedRadii.topRight;
-                //     const float length = rect.h - clampedRadii.topRight - clampedRadii.bottomRight;
-                //     SDL_FRect line = { starting_x, starting_y, config->width.right, length };
-                //     SDL_RenderFillRect(rendererData->renderer, &line);
-                // }
-                // if (config->width.top > 0) {
-                //     const float starting_x = rect.x + clampedRadii.topLeft;
-                //     const float length = rect.w - clampedRadii.topLeft - clampedRadii.topRight;
-                //     SDL_FRect line = { starting_x, rect.y, length, config->width.top };
-                //     SDL_RenderFillRect(rendererData->renderer, &line);
-                // }
-                // if (config->width.bottom > 0) {
-                //     const float starting_x = rect.x + clampedRadii.bottomLeft;
-                //     const float starting_y = rect.y + rect.h - (float)config->width.bottom;
-                //     const float length = rect.w - clampedRadii.bottomLeft - clampedRadii.bottomRight;
-                //     SDL_FRect line = { starting_x, starting_y, length, config->width.bottom };
-                //     SDL_SetRenderDrawColor(rendererData->renderer, config->color.r, config->color.g, config->color.b, config->color.a);
-                //     SDL_RenderFillRect(rendererData->renderer, &line);
-                // }
-                // //corners
-                // if (config->cornerRadius.topLeft > 0) {
-                //     const float centerX = rect.x + clampedRadii.topLeft -1;
-                //     const float centerY = rect.y + clampedRadii.topLeft;
-                //     SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.topLeft,
-                //         180.0f, 270.0f, config->width.top, config->color);
-                // }
-                // if (config->cornerRadius.topRight > 0) {
-                //     const float centerX = rect.x + rect.w - clampedRadii.topRight -1;
-                //     const float centerY = rect.y + clampedRadii.topRight;
-                //     SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.topRight,
-                //         270.0f, 360.0f, config->width.top, config->color);
-                // }
-                // if (config->cornerRadius.bottomLeft > 0) {
-                //     const float centerX = rect.x + clampedRadii.bottomLeft -1;
-                //     const float centerY = rect.y + rect.h - clampedRadii.bottomLeft -1;
-                //     SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.bottomLeft,
-                //         90.0f, 180.0f, config->width.bottom, config->color);
-                // }
-                // if (config->cornerRadius.bottomRight > 0) {
-                //     const float centerX = rect.x + rect.w - clampedRadii.bottomRight -1; //TODO: why need to -1 in all calculations???
-                //     const float centerY = rect.y + rect.h - clampedRadii.bottomRight -1;
-                //     SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.bottomRight,
-                //         0.0f, 90.0f, config->width.bottom, config->color);
-                // }
-
-            } break;
-
-            case CLAY_RENDER_COMMAND_TYPE_SCISSOR_START: {
-                //Clay_BoundingBox boundingBox = rcmd->boundingBox;
-                //currentClippingRectangle = (SDL_Rect) {
-                //        .x = boundingBox.x,
-                //        .y = boundingBox.y,
-                //        .w = boundingBox.width,
-                //        .h = boundingBox.height,
-                //};
-                //SDL_SetRenderClipRect(rendererData->renderer, &currentClippingRectangle);
-            } break;
-
-            case CLAY_RENDER_COMMAND_TYPE_SCISSOR_END: {
-                // SDL_SetRenderClipRect(rendererData->renderer, NULL);
-            } break;
-
-            case CLAY_RENDER_COMMAND_TYPE_IMAGE: {
-                // SDL_Surface *image = (SDL_Surface *)rcmd->renderData.image.imageData;
-                // SDL_Texture *texture = SDL_CreateTextureFromSurface(rendererData->renderer, image);
-                // const SDL_FRect dest = { rect.x, rect.y, rect.w, rect.h };
-
-                // SDL_RenderTexture(rendererData->renderer, texture, NULL, &dest);
-                // SDL_DestroyTexture(texture);
-            } break;
-
-            default:
-                SDL_Log("Unknown render command type: %d", rcmd->commandType);
-        }
-    }
 }
