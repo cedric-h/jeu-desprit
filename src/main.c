@@ -292,6 +292,9 @@ static struct {
   /* input */
   size_t win_size_x, win_size_y;
   float mouse_screen_x, mouse_screen_y;
+  /* mouse projected onto the ground plane at z=0
+   * used for aiming weapons, picking up/dropping things from inventory etc. */
+  f3 mouse_ground;
 
   /* timekeeping */
   uint64_t ts_last_frame, ts_first;
@@ -333,6 +336,7 @@ static struct {
       GLint shader_u_mvp;
     } geo;
 
+    /* pp is "post processing" - used for AA and FX */
     struct {
       float fb_scale;
 
@@ -1197,6 +1201,17 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       );
       jeux.camera = f4x4_mul_f4x4(projection, f4x4_invert(orbit));
     }
+
+
+    /* cast a ray to the ground to find jeux.mouse_ground */
+    {
+      f3 origin = jeux_screen_to_world((f3) { jeux.mouse_screen_x, jeux.mouse_screen_y,  1.0f });
+      f3 target = jeux_screen_to_world((f3) { jeux.mouse_screen_x, jeux.mouse_screen_y, -1.0f });
+      f3 ray_vector = { target.x - origin.x, target.y - origin.y, target.z - origin.z };
+
+      jeux.mouse_ground = ray_hit_plane(origin, ray_vector, (f3) { 0 }, (f3) { 0, 0, 1 });
+    }
+
   }
 
   /* fill dynamic geometry buffers */
@@ -1229,40 +1244,19 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
           (Color) { 255, 0, 0, 255 }
         );
 
-        if (0) {
-          f3 vec = jeux_screen_to_world((f3) {
-            jeux.mouse_screen_x,
-            jeux.mouse_screen_y,
-            -1.0f,
-          });
-
-          gl_geo_box_outline(
-            vec,
-            (f3) { 0.3f, 0.3f, 0.3f },
-            debug_thickness,
-            (Color) { 255, 0, 0, 255 }
-          );
-        }
-
-
-        /* cast a ray to the ground, draw a crosshair there */
-        {
-          f3 origin = jeux_screen_to_world((f3) { jeux.mouse_screen_x, jeux.mouse_screen_y,  1.0f });
-          f3 target = jeux_screen_to_world((f3) { jeux.mouse_screen_x, jeux.mouse_screen_y, -1.0f });
-          f3 ray_vector = { target.x - origin.x, target.y - origin.y, target.z - origin.z };
-
-          f3 hit = ray_hit_plane(origin, ray_vector, (f3) { 0 }, (f3) { 0, 0, 1 });
-
-          gl_geo_ring(
-            32,
-            hit,
-            0.2f,
-            debug_thickness,
-            (Color) { 255, 0, 0, 255 }
-          );
-        }
+        /* draw a ring where we think the mouse is in 3D space
+         * (useful to compare to its 2D position) */
+        gl_geo_ring(
+          32,
+          jeux.mouse_ground,
+          0.2f,
+          debug_thickness,
+          (Color) { 255, 0, 0, 255 }
+        );
       }
 
+      /* lil ring around the player,
+       * useful for debugging physics */
       gl_geo_ring(
         32,
         (f3) { 0.0f, 0.0f, -0.01f },
@@ -1305,13 +1299,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
       /* rotate towards mouse */
       {
-          f3 origin = jeux_screen_to_world((f3) { jeux.mouse_screen_x, jeux.mouse_screen_y,  1.0f });
-          f3 target = jeux_screen_to_world((f3) { jeux.mouse_screen_x, jeux.mouse_screen_y, -1.0f });
-          f3 ray_vector = { target.x - origin.x, target.y - origin.y, target.z - origin.z };
-
-          f3 hit = ray_hit_plane(origin, ray_vector, (f3) { 0 }, (f3) { 0, 0, 1 });
-
-          model = f4x4_mul_f4x4(model, f4x4_turn(atan2f(hit.y - 0, hit.x - 0) + (M_PI * 0.5f)));
+          f3 mouse = jeux.mouse_ground;
+          model = f4x4_mul_f4x4(model, f4x4_turn(atan2f(mouse.y - 0, mouse.x - 0) + (M_PI * 0.5f)));
       }
 
       float t = fmodf(jeux.elapsed, animdata_duration);

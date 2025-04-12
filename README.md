@@ -49,15 +49,21 @@ Run install again; you should get a window now
 call ./bs/win_install.bat
 ```
 
+### Build and run
+
 Henceforth you can simply call `win_build_run` to build and run:
 ```
 call ./bs/win_build_run.bat
 ```
 
+### Debugger
+
 Or if you're using a debugger, you may prefer to simply `call win_build.bat`
 ```
 call ./bs/win_build.bat
 ```
+
+### Release
 
 Release build, cmd.exe:
 ```
