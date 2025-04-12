@@ -1647,6 +1647,10 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
       }
 
+      /* note: if you run the postprocessing with depth enabled,
+       * nothing renders, but only on Windows! */
+      glDisable(GL_DEPTH_TEST);
+
     }
 
     /* stop writing to the framebuffer, start writing to the screen */
