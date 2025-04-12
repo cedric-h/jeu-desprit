@@ -9,6 +9,7 @@
 #include <SDL3/SDL_main.h>
 #include "gl_include/gles3.h"
 
+#include "clay.h"
 #include "font.h"
 
 #define BREAKPOINT() __builtin_debugtrap()
@@ -1228,21 +1229,25 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     {
       float debug_thickness = jeux.win_size_x * 0.00225f;
 
-      /* draw an X where we think the mouse is */
-      {
-        gl_geo_line(
-          (f3) { jeux.mouse_screen_x - 10.0f, jeux.mouse_screen_y + 10.0f, 0.99f },
-          (f3) { jeux.mouse_screen_x + 10.0f, jeux.mouse_screen_y - 10.0f, 0.99f },
-          debug_thickness,
-          (Color) { 255, 0, 0, 255 }
-        );
+      /* debug where we think the mouse is */
+      if (0) {
 
-        gl_geo_line(
-          (f3) { jeux.mouse_screen_x + 10.0f, jeux.mouse_screen_y + 10.0f, 0.99f },
-          (f3) { jeux.mouse_screen_x - 10.0f, jeux.mouse_screen_y - 10.0f, 0.99f },
-          debug_thickness,
-          (Color) { 255, 0, 0, 255 }
-        );
+        /* draw an X at the mouse's 2D position */
+        {
+          gl_geo_line(
+            (f3) { jeux.mouse_screen_x - 10.0f, jeux.mouse_screen_y + 10.0f, 0.99f },
+            (f3) { jeux.mouse_screen_x + 10.0f, jeux.mouse_screen_y - 10.0f, 0.99f },
+            debug_thickness,
+            (Color) { 255, 0, 0, 255 }
+          );
+
+          gl_geo_line(
+            (f3) { jeux.mouse_screen_x + 10.0f, jeux.mouse_screen_y + 10.0f, 0.99f },
+            (f3) { jeux.mouse_screen_x - 10.0f, jeux.mouse_screen_y - 10.0f, 0.99f },
+            debug_thickness,
+            (Color) { 255, 0, 0, 255 }
+          );
+        }
 
         /* draw a ring where we think the mouse is in 3D space
          * (useful to compare to its 2D position) */
@@ -1507,4 +1512,134 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
   SDL_GL_SwapWindow(jeux.sdl.window);
   return SDL_APP_CONTINUE;
+}
+
+static void gl_draw_clay_commands(
+  Clay_RenderCommandArray *rcommands
+) {
+    for (size_t i = 0; i < rcommands->length; i++) {
+        Clay_RenderCommand *rcmd = Clay_RenderCommandArray_Get(rcommands, i);
+        Clay_BoundingBox rect = rcmd->boundingBox;
+
+        switch (rcmd->commandType) {
+
+            case CLAY_RENDER_COMMAND_TYPE_RECTANGLE: {
+                // Clay_RectangleRenderData *config = &rcmd->renderData.rectangle;
+
+
+                // SDL_SetRenderDrawBlendMode(rendererData->renderer, SDL_BLENDMODE_BLEND);
+                // SDL_SetRenderDrawColor(rendererData->renderer, config->backgroundColor.r, config->backgroundColor.g, config->backgroundColor.b, config->backgroundColor.a);
+                // if (config->cornerRadius.topLeft > 0) {
+                //     SDL_Clay_RenderFillRoundedRect(rendererData, rect, config->cornerRadius.topLeft, config->backgroundColor);
+                // } else {
+                //     SDL_RenderFillRect(rendererData->renderer, &rect);
+                // }
+            } break;
+
+            case CLAY_RENDER_COMMAND_TYPE_TEXT: {
+                Clay_TextRenderData *config = &rcmd->renderData.text;
+                gl_text_draw(config->stringContents.chars, rect.x, rect.y, 24.0f);
+
+                // TTF_Font *font = rendererData->fonts[config->fontId];
+                // TTF_Text *text = TTF_CreateText(rendererData->textEngine, font, config->stringContents.chars, config->stringContents.length);
+                // TTF_SetTextColor(text, config->textColor.r, config->textColor.g, config->textColor.b, config->textColor.a);
+                // TTF_DrawRendererText(text, rect.x, rect.y);
+                // TTF_DestroyText(text);
+            } break;
+
+            case CLAY_RENDER_COMMAND_TYPE_BORDER: {
+                // Clay_BorderRenderData *config = &rcmd->renderData.border;
+
+                // const float minRadius = SDL_min(rect.w, rect.h) / 2.0f;
+                // const Clay_CornerRadius clampedRadii = {
+                //     .topLeft = SDL_min(config->cornerRadius.topLeft, minRadius),
+                //     .topRight = SDL_min(config->cornerRadius.topRight, minRadius),
+                //     .bottomLeft = SDL_min(config->cornerRadius.bottomLeft, minRadius),
+                //     .bottomRight = SDL_min(config->cornerRadius.bottomRight, minRadius)
+                // };
+                // //edges
+                // SDL_SetRenderDrawColor(rendererData->renderer, config->color.r, config->color.g, config->color.b, config->color.a);
+                // if (config->width.left > 0) {
+                //     const float starting_y = rect.y + clampedRadii.topLeft;
+                //     const float length = rect.h - clampedRadii.topLeft - clampedRadii.bottomLeft;
+                //     SDL_FRect line = { rect.x, starting_y, config->width.left, length };
+                //     SDL_RenderFillRect(rendererData->renderer, &line);
+                // }
+                // if (config->width.right > 0) {
+                //     const float starting_x = rect.x + rect.w - (float)config->width.right;
+                //     const float starting_y = rect.y + clampedRadii.topRight;
+                //     const float length = rect.h - clampedRadii.topRight - clampedRadii.bottomRight;
+                //     SDL_FRect line = { starting_x, starting_y, config->width.right, length };
+                //     SDL_RenderFillRect(rendererData->renderer, &line);
+                // }
+                // if (config->width.top > 0) {
+                //     const float starting_x = rect.x + clampedRadii.topLeft;
+                //     const float length = rect.w - clampedRadii.topLeft - clampedRadii.topRight;
+                //     SDL_FRect line = { starting_x, rect.y, length, config->width.top };
+                //     SDL_RenderFillRect(rendererData->renderer, &line);
+                // }
+                // if (config->width.bottom > 0) {
+                //     const float starting_x = rect.x + clampedRadii.bottomLeft;
+                //     const float starting_y = rect.y + rect.h - (float)config->width.bottom;
+                //     const float length = rect.w - clampedRadii.bottomLeft - clampedRadii.bottomRight;
+                //     SDL_FRect line = { starting_x, starting_y, length, config->width.bottom };
+                //     SDL_SetRenderDrawColor(rendererData->renderer, config->color.r, config->color.g, config->color.b, config->color.a);
+                //     SDL_RenderFillRect(rendererData->renderer, &line);
+                // }
+                // //corners
+                // if (config->cornerRadius.topLeft > 0) {
+                //     const float centerX = rect.x + clampedRadii.topLeft -1;
+                //     const float centerY = rect.y + clampedRadii.topLeft;
+                //     SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.topLeft,
+                //         180.0f, 270.0f, config->width.top, config->color);
+                // }
+                // if (config->cornerRadius.topRight > 0) {
+                //     const float centerX = rect.x + rect.w - clampedRadii.topRight -1;
+                //     const float centerY = rect.y + clampedRadii.topRight;
+                //     SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.topRight,
+                //         270.0f, 360.0f, config->width.top, config->color);
+                // }
+                // if (config->cornerRadius.bottomLeft > 0) {
+                //     const float centerX = rect.x + clampedRadii.bottomLeft -1;
+                //     const float centerY = rect.y + rect.h - clampedRadii.bottomLeft -1;
+                //     SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.bottomLeft,
+                //         90.0f, 180.0f, config->width.bottom, config->color);
+                // }
+                // if (config->cornerRadius.bottomRight > 0) {
+                //     const float centerX = rect.x + rect.w - clampedRadii.bottomRight -1; //TODO: why need to -1 in all calculations???
+                //     const float centerY = rect.y + rect.h - clampedRadii.bottomRight -1;
+                //     SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.bottomRight,
+                //         0.0f, 90.0f, config->width.bottom, config->color);
+                // }
+
+            } break;
+
+            case CLAY_RENDER_COMMAND_TYPE_SCISSOR_START: {
+                //Clay_BoundingBox boundingBox = rcmd->boundingBox;
+                //currentClippingRectangle = (SDL_Rect) {
+                //        .x = boundingBox.x,
+                //        .y = boundingBox.y,
+                //        .w = boundingBox.width,
+                //        .h = boundingBox.height,
+                //};
+                //SDL_SetRenderClipRect(rendererData->renderer, &currentClippingRectangle);
+            } break;
+
+            case CLAY_RENDER_COMMAND_TYPE_SCISSOR_END: {
+                // SDL_SetRenderClipRect(rendererData->renderer, NULL);
+            } break;
+
+            case CLAY_RENDER_COMMAND_TYPE_IMAGE: {
+                // SDL_Surface *image = (SDL_Surface *)rcmd->renderData.image.imageData;
+                // SDL_Texture *texture = SDL_CreateTextureFromSurface(rendererData->renderer, image);
+                // const SDL_FRect dest = { rect.x, rect.y, rect.w, rect.h };
+
+                // SDL_RenderTexture(rendererData->renderer, texture, NULL, &dest);
+                // SDL_DestroyTexture(texture);
+            } break;
+
+            default:
+                SDL_Log("Unknown render command type: %d", rcmd->commandType);
+        }
+    }
 }
