@@ -15,10 +15,6 @@ if defined RELEASE (
 
 cd build
 
-if defined jeux.exe (
-    del jeux.exe
-)
-
 if not exist angle (
     echo ERROR: No build/angle Directory; see Windows section in README
     exit /b 1
@@ -32,5 +28,7 @@ clang -o jeux.exe %FLAGS% ^
   SDL\build\SDL3.lib ^
   -ISDL/include ^
   -Wl,-subsystem:windows
+
+if %errorlevel% neq 0 exit /b %errorlevel%
 
 cd ..

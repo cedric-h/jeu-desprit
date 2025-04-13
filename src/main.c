@@ -15,14 +15,22 @@
 #include "clay_demo.h"
 #include "font.h"
 
+#define GAME_DEBUG true
+
 #define BREAKPOINT() __builtin_debugtrap()
 #define jx_COUNT(arr) (sizeof(arr) / sizeof((arr)[0]))
 typedef struct { float x, y; } f2;
 typedef struct { float x, y, z; } f3;
-typedef union { float arr[4]; struct { float x, y, z, w; } p; f3 p3; } f4;
+typedef union { float arr[4]; struct { float x, y, z, w; } p; f3 xyz; } f4;
 typedef union { float arr[4][4]; f4 rows[4]; float floats[16]; } f4x4;
 
+typedef struct { f2 min, max; } Box2;
+#define BOX2_UNCONSTRAINED (Box2) { { -INFINITY, -INFINITY }, {  INFINITY,  INFINITY } }
+#define BOX2_CLOSED        (Box2) { {  INFINITY,  INFINITY }, { -INFINITY, -INFINITY } }
+
 static float lerp(float v0, float v1, float t) { return (1.0f - t) * v0 + t * v1; }
+static float clamp(float min, float max, float t) { return fminf(max, fmaxf(min, t)); }
+static float inv_lerp(float min, float max, float p) { return (p - min) / (max - min); }
 
 static f3 lerp3(f3 a, f3 b, float t) {
   return (f3) {
@@ -186,13 +194,13 @@ static f4 f4x4_mul_f4(f4x4 m, f4 v) {
 }
 
 static f3 f4x4_transform_f3(f4x4 m, f3 v) {
-  f4 res = { .p3 = v };
+  f4 res = { .xyz = v };
   res.p.w = 1.0f;
   res = f4x4_mul_f4(m, res);
   res.p.x /= res.p.w;
   res.p.y /= res.p.w;
   res.p.z /= res.p.w;
-  return res.p3;
+  return res.xyz;
 }
 
 static f4x4 f4x4_scale(float scale) {
@@ -410,7 +418,7 @@ static struct {
 static SDL_AppResult gl_init(void);
 static void gui_handle_errors(Clay_ErrorData error_data) { SDL_Log("%s\n", error_data.errorText.chars); }
 static Clay_Dimensions gui_measure_text(Clay_StringSlice text, Clay_TextElementConfig *config, void *userData) {
-  float size = font_BASE_CHAR_SIZE;
+  float size = config->fontSize;
   float scale = (size / font_BASE_CHAR_SIZE);
 
   float size_x = 0;
@@ -500,6 +508,14 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     jeux.win_size_x = event->window.data1;
     jeux.win_size_y = event->window.data2;
     gl_resize();
+  }
+
+  if (event->type == SDL_EVENT_KEY_UP) {
+#if GAME_DEBUG
+    if (event->key.key == SDLK_ESCAPE) {
+      return SDL_APP_SUCCESS;
+    }
+#endif
   }
 
   /* clay event handling */
@@ -1104,7 +1120,8 @@ static void gl_text_reset(void) {
   jeux.gl.text.idx_wtr = jeux.gl.text.idx;
 }
 
-static void gl_text_draw(const char *msg, size_t msg_len, float screen_x, float screen_y, float size) {
+/* easy text drawing, for e.g. debug text! */
+static void gl_text_draw(const char *msg, float screen_x, float screen_y, float size) {
   gl_text_Vtx *vtx_wtr = jeux.gl.text.vtx_wtr;
   gl_Tri      *idx_wtr = jeux.gl.text.idx_wtr;
 
@@ -1112,8 +1129,8 @@ static void gl_text_draw(const char *msg, size_t msg_len, float screen_x, float 
 
   float pen_x = screen_x;
   float pen_y = screen_y + size * 0.75f; /* little adjustment */
-  for (int i = 0; i < msg_len; i++) {
-    size_t c = msg[i] | (1 << 5); /* this is a caps-only font, so atlas only has lowercase */
+  do {
+    size_t c = *msg | (1 << 5); /* this is a caps-only font, so atlas only has lowercase */
     font_LetterRegion *l = &font_letter_regions[c];
 
     uint16_t start = vtx_wtr - jeux.gl.text.vtx;
@@ -1127,6 +1144,87 @@ static void gl_text_draw(const char *msg, size_t msg_len, float screen_x, float 
     *vtx_wtr++ = (gl_text_Vtx) { x + size_x,  y + size_y, l->x + l->size_x, l->y + l->size_y, size };
     *vtx_wtr++ = (gl_text_Vtx) { x         ,  y + size_y, l->x            , l->y + l->size_y, size };
     *vtx_wtr++ = (gl_text_Vtx) { x         ,  y         , l->x            , l->y            , size };
+
+    *idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
+    *idx_wtr++ = (gl_Tri) { start + 2, start + 3, start + 0 };
+
+    pen_x += l->advance * scale;
+  } while (*msg++);
+
+  jeux.gl.text.vtx_wtr = vtx_wtr;
+  jeux.gl.text.idx_wtr = idx_wtr;
+}
+
+/* probably only UI renderers need this level of configuration */
+static void gl_text_draw_ex(
+  const char *msg,
+  size_t msg_len,
+  float screen_x,
+  float screen_y,
+  float size,
+  Box2 clip,
+  Color color
+) {
+  gl_text_Vtx *vtx_wtr = jeux.gl.text.vtx_wtr;
+  gl_Tri      *idx_wtr = jeux.gl.text.idx_wtr;
+
+  float scale = (size / font_BASE_CHAR_SIZE);
+
+  float pen_x = screen_x;
+  float pen_y = screen_y + size * 0.75f; /* little adjustment */
+  for (int i = 0; i < msg_len; i++) {
+    size_t c = msg[i] | (1 << 5); /* this is a caps-only font, so atlas only has lowercase */
+    font_LetterRegion *l = &font_letter_regions[c];
+
+    uint16_t start = vtx_wtr - jeux.gl.text.vtx;
+
+    float min_x = pen_x;
+    float min_y = pen_y - (l->top) * scale;
+    float max_x = min_x + l->size_x * scale;
+    float max_y = min_y + l->size_y * scale;
+
+    float min_u = l->x;
+    float min_v = l->y;
+    float max_u = l->x + l->size_x;
+    float max_v = l->y + l->size_y;
+
+    /* reproject UVs so that clip doesn't exceed X without leaking */
+    {
+      /* no need to clamp X so far :shrug: */
+
+      /* enforce clamp max y */
+      {
+        float cut_max_y_t = clamp(1.0, 0.0, inv_lerp(min_y, max_y, clip.max.y));
+        float cut_min_y_t = clamp(0.0, 1.0, inv_lerp(max_y, min_y, clip.max.y));
+
+        float og_min_y = min_y, og_max_y = max_y;
+        min_y = lerp(og_min_y, og_max_y, cut_max_y_t);
+        max_y = lerp(og_max_y, og_min_y, cut_min_y_t);
+
+        float og_min_v = min_v, og_max_v = max_v;
+        min_v = lerp(og_min_v, og_max_v, cut_max_y_t);
+        max_v = lerp(og_max_v, og_min_v, cut_min_y_t);
+      }
+
+      /* enforce clamp min y */
+      {
+        float cut_max_y_t = clamp(0.0, 1.0, inv_lerp(min_y, max_y, clip.min.y));
+        float cut_min_y_t = clamp(1.0, 0.0, inv_lerp(max_y, min_y, clip.min.y));
+
+        float og_min_y = min_y, og_max_y = max_y;
+        min_y = lerp(og_min_y, og_max_y, cut_max_y_t);
+        max_y = lerp(og_max_y, og_min_y, cut_min_y_t);
+
+        float og_min_v = min_v, og_max_v = max_v;
+        min_v = lerp(og_min_v, og_max_v, cut_max_y_t);
+        max_v = lerp(og_max_v, og_min_v, cut_min_y_t);
+      }
+    }
+
+    *vtx_wtr++ = (gl_text_Vtx) { max_x, min_y, max_u, min_v, size };
+    *vtx_wtr++ = (gl_text_Vtx) { max_x, max_y, max_u, max_v, size };
+    *vtx_wtr++ = (gl_text_Vtx) { min_x, max_y, min_u, max_v, size };
+    *vtx_wtr++ = (gl_text_Vtx) { min_x, min_y, min_u, min_v, size };
 
     *idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
     *idx_wtr++ = (gl_Tri) { start + 2, start + 3, start + 0 };
@@ -1249,13 +1347,15 @@ static void gl_geo_box_outline(f3 center, f3 scale, float thickness, Color color
         a.p.x += center.x; a.p.y += center.y; a.p.z += center.z;
         b.p.x += center.x; b.p.y += center.y; b.p.z += center.z;
 
-        gl_geo_line(jeux_world_to_screen(a.p3), jeux_world_to_screen(b.p3), thickness, color);
+        gl_geo_line(jeux_world_to_screen(a.xyz), jeux_world_to_screen(b.xyz), thickness, color);
       }
     }
   }
 }
 
 static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
+  Box2 clip = BOX2_UNCONSTRAINED;
+
   for (size_t i = 0; i < rcommands->length; i++) {
     Clay_RenderCommand *rcmd = Clay_RenderCommandArray_Get(rcommands, i);
     Clay_BoundingBox rect = rcmd->boundingBox;
@@ -1276,30 +1376,26 @@ static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
           }
         );
 
-        // SDL_SetRenderDrawBlendMode(rendererData->renderer, SDL_BLENDMODE_BLEND);
-        // SDL_SetRenderDrawColor(rendererData->renderer, );
-        // if (config->cornerRadius.topLeft > 0) {
-        //   SDL_Clay_RenderFillRoundedRect(rendererData, rect, config->cornerRadius.topLeft, config->backgroundColor);
-        // } else {
-        //   SDL_RenderFillRect(rendererData->renderer, &rect);
-        // }
+        /* NOTE: we're ignoring
+         * config->cornerRadius.topLeft */
       } break;
 
       case CLAY_RENDER_COMMAND_TYPE_TEXT: {
         Clay_TextRenderData *config = &rcmd->renderData.text;
-        gl_text_draw(
+        gl_text_draw_ex(
           config->stringContents.chars,
           config->stringContents.length,
           rect.x,
           rect.y,
-          24.0f
+          config->fontSize,
+          clip,
+          (Color) {
+            config->textColor.r,
+            config->textColor.g,
+            config->textColor.b,
+            config->textColor.a
+          }
         );
-
-        // TTF_Font *font = rendererData->fonts[config->fontId];
-        // TTF_Text *text = TTF_CreateText(rendererData->textEngine, font, config->stringContents.chars, config->stringContents.length);
-        // TTF_SetTextColor(text, config->textColor.r, config->textColor.g, config->textColor.b, config->textColor.a);
-        // TTF_DrawRendererText(text, rect.x, rect.y);
-        // TTF_DestroyText(text);
       } break;
 
       case CLAY_RENDER_COMMAND_TYPE_BORDER: {
@@ -1370,21 +1466,19 @@ static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
       } break;
 
       case CLAY_RENDER_COMMAND_TYPE_SCISSOR_START: {
-        //Clay_BoundingBox boundingBox = rcmd->boundingBox;
-        //currentClippingRectangle = (SDL_Rect) {
-        //    .x = boundingBox.x,
-        //    .y = boundingBox.y,
-        //    .w = boundingBox.width,
-        //    .h = boundingBox.height,
-        //};
-        //SDL_SetRenderClipRect(rendererData->renderer, &currentClippingRectangle);
+        Clay_BoundingBox bbox = rcmd->boundingBox;
+        clip.min.x = bbox.x;
+        clip.min.y = bbox.y;
+        clip.max.x = bbox.x + bbox.width;
+        clip.max.y = bbox.y + bbox.height;
       } break;
 
       case CLAY_RENDER_COMMAND_TYPE_SCISSOR_END: {
-        // SDL_SetRenderClipRect(rendererData->renderer, NULL);
+        clip = BOX2_UNCONSTRAINED;
       } break;
 
       case CLAY_RENDER_COMMAND_TYPE_IMAGE: {
+        SDL_Log("does anyone use this?\n");
         // SDL_Surface *image = (SDL_Surface *)rcmd->renderData.image.imageData;
         // SDL_Texture *texture = SDL_CreateTextureFromSurface(rendererData->renderer, image);
         // const SDL_FRect dest = { rect.x, rect.y, rect.w, rect.h };
@@ -1607,7 +1701,6 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     if (0) gl_text_draw(
       "hi! i'm ced?",
-      sizeof("hi! i'm ced?"),
       jeux.win_size_x * 0.5,
       jeux.win_size_y * 0.5,
       24.0f

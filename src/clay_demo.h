@@ -1,3 +1,5 @@
+// vim: sw=2 ts=2 expandtab smartindent
+
 #include <stdlib.h>
 
 const int FONT_ID_BODY_16 = 0;
@@ -60,12 +62,9 @@ typedef struct {
     int32_t* selectedDocumentIndex;
 } SidebarClickData;
 
-void HandleSidebarInteraction(
-    Clay_ElementId elementId,
-    Clay_PointerData pointerData,
-    intptr_t userData
-) {
-    SidebarClickData *clickData = (SidebarClickData*)userData;
+void HandleSidebarInteraction(SidebarClickData *clickData) {
+    Clay_PointerData pointerData = Clay_GetCurrentContext()->pointerInfo;
+
     // If this button was clicked
     if (pointerData.state == CLAY_POINTER_DATA_PRESSED_THIS_FRAME) {
         if (clickData->requestedDocumentIndex >= 0 && clickData->requestedDocumentIndex < documents.length) {
@@ -221,7 +220,7 @@ Clay_RenderCommandArray ClayVideoDemo_CreateLayout(ClayVideoDemo_Data *data) {
                         *clickData = (SidebarClickData) { .requestedDocumentIndex = i, .selectedDocumentIndex = &data->selectedDocumentIndex };
                         data->frameArena.offset += sizeof(SidebarClickData);
                         CLAY({ .layout = sidebarButtonLayout, .backgroundColor = (Clay_Color) { 120, 120, 120, Clay_Hovered() ? 120 : 0 }, .cornerRadius = CLAY_CORNER_RADIUS(8) }) {
-                            Clay_OnHover(HandleSidebarInteraction, (intptr_t)clickData);
+                            if (Clay_Hovered()) HandleSidebarInteraction(clickData);
                             CLAY_TEXT(document.title, CLAY_TEXT_CONFIG({
                                 .fontId = FONT_ID_BODY_16,
                                 .fontSize = 20,
