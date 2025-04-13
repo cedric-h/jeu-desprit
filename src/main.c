@@ -304,7 +304,11 @@ static struct {
   uint64_t ts_last_frame, ts_first;
   double elapsed;
 
-  /* camera */
+  /* camera goes from 3D world -> 2D in -1 .. 1
+   *
+   * screen goes from 2D in 0 ... window_size_x/window_size_y to -1 ... 1,
+   * useful for laying things out in pixels, mouse picking etc.
+   */
   f4x4 camera, screen;
   f3 camera_eye;
 
@@ -362,10 +366,10 @@ static struct {
     } pp;
 
     struct {
-      gl_text_Vtx vtx[99999];
+      gl_text_Vtx vtx[999999];
       gl_text_Vtx *vtx_wtr;
 
-      gl_Tri idx[99999];
+      gl_Tri idx[999999];
       gl_Tri *idx_wtr;
 
       GLuint buf_vtx;
@@ -375,7 +379,7 @@ static struct {
 
       GLuint shader;
       GLint shader_u_tex_size;
-      GLint shader_u_win_size;
+      GLint shader_u_mvp;
       GLint shader_u_buffer;
       GLint shader_u_gamma;
       GLint shader_a_pos;
@@ -404,16 +408,15 @@ static struct {
 };
 
 static SDL_AppResult gl_init(void);
-static void gui_handle_errors(Clay_ErrorData error_data) { SDL_Log("%s", error_data.errorText.chars); }
+static void gui_handle_errors(Clay_ErrorData error_data) { SDL_Log("%s\n", error_data.errorText.chars); }
 static Clay_Dimensions gui_measure_text(Clay_StringSlice text, Clay_TextElementConfig *config, void *userData) {
   float size = font_BASE_CHAR_SIZE;
-  size *= SDL_GetWindowPixelDensity(jeux.sdl.window);
   float scale = (size / font_BASE_CHAR_SIZE);
 
   float size_x = 0;
   float size_y = 0;
   for (int i = 0; i < text.length; i++) {
-    char c = text.chars[i];
+    char c = text.chars[i] | (1 << 5); /* this is a caps-only font, so atlas only has lowercase */
     font_LetterRegion *l = &font_letter_regions[(size_t)(c)];
 
     size_x += l->advance * scale;
@@ -561,19 +564,19 @@ static SDL_AppResult gl_init(void) {
           "\n"
           "uniform mat4 u_mvp;\n"
           "\n"
-          "varying vec3 v_color;\n"
+          "varying vec4 v_color;\n"
           "varying vec3 v_normal;\n"
           "\n"
           "void main() {\n"
           "  gl_Position = u_mvp * vec4(a_pos.xyz, 1.0);\n"
-          "  v_color  = a_color.xyz;\n"
+          "  v_color  = a_color;\n"
           "  v_normal = a_normal;\n"
           "}\n"
         ,
         .fs =
           "precision mediump float;\n"
           "\n"
-          "varying vec3 v_color;\n"
+          "varying vec4 v_color;\n"
           "varying vec3 v_normal;\n"
           "\n"
           "uniform sampler2D u_tex;\n"
@@ -587,9 +590,9 @@ static SDL_AppResult gl_init(void) {
           "  float ramp = 0.0;\n"
           "       if (diffuse > 0.923) ramp = 1.00;\n"
           "  else if (diffuse > 0.477) ramp = 0.50;\n"
-          "  vec3 desaturated = vec3(dot(v_color, vec3(0.2126, 0.7152, 0.0722)));\n"
-          "  vec3 color = mix(desaturated, v_color, min(1.0, 0.2 + ramp));\n"
-          "  gl_FragColor = vec4(color * mix(0.8, 1.6, ramp), 1.0);\n"
+          "  vec3 desaturated = vec3(dot(v_color.xyz, vec3(0.2126, 0.7152, 0.0722)));\n"
+          "  vec3 color = mix(desaturated, v_color.xyz, min(1.0, 0.2 + ramp));\n"
+          "  gl_FragColor = vec4(color * mix(0.8, 1.6, ramp), v_color.a);\n"
           "}\n"
       },
       {
@@ -600,16 +603,15 @@ static SDL_AppResult gl_init(void) {
           "attribute vec2 a_uv;\n"
           "attribute float a_size;\n"
           "\n"
+          "uniform mat4 u_mvp;\n"
           "uniform vec2 u_tex_size;\n"
-          "uniform vec2 u_win_size;\n"
           "uniform float u_gamma;\n"
           "\n"
           "varying vec2 v_uv;\n"
           "varying float v_gamma;\n"
           "\n"
           "void main() {\n"
-          "  gl_Position = vec4(a_pos / u_win_size, 0.0, 1.0);\n"
-          "  gl_Position.xy = gl_Position.xy*2.0 - 1.0;\n"
+          "  gl_Position = u_mvp * vec4(a_pos, 0.0, 1.0);\n"
           "  v_uv = a_uv / u_tex_size;\n"
           "  v_gamma = u_gamma / a_size;\n"
           "}\n"
@@ -962,7 +964,7 @@ static SDL_AppResult gl_init(void) {
       jeux.gl.text.shader_u_buffer   = glGetUniformLocation(jeux.gl.text.shader, "u_buffer"  );
       jeux.gl.text.shader_u_gamma    = glGetUniformLocation(jeux.gl.text.shader, "u_gamma"   );
       jeux.gl.text.shader_u_tex_size = glGetUniformLocation(jeux.gl.text.shader, "u_tex_size");
-      jeux.gl.text.shader_u_win_size = glGetUniformLocation(jeux.gl.text.shader, "u_win_size");
+      jeux.gl.text.shader_u_mvp      = glGetUniformLocation(jeux.gl.text.shader, "u_mvp"     );
       jeux.gl.text.shader_a_pos      = glGetAttribLocation( jeux.gl.text.shader, "a_pos"     );
       jeux.gl.text.shader_a_uv       = glGetAttribLocation( jeux.gl.text.shader, "a_uv"      );
       jeux.gl.text.shader_a_size     = glGetAttribLocation( jeux.gl.text.shader, "a_size"    );
@@ -1009,10 +1011,11 @@ static SDL_AppResult gl_init(void) {
 
 /* recreates jeux.gl.pp.screen resources to match new jeux.win_size */
 static void gl_resize(void) {
+  /* Flip the y! */
   jeux.screen = f4x4_ortho(
-       0.0f, jeux.win_size_x,
-       0.0f, jeux.win_size_y,
-      -1.0f, 1.0f
+     0.0f,             jeux.win_size_x,
+     jeux.win_size_y,  0.0f,
+    -1.0f,             1.0f
   );
 
   jeux.gl.pp.phys_win_size_x = jeux.win_size_x*SDL_GetWindowPixelDensity(jeux.sdl.window);
@@ -1101,34 +1104,35 @@ static void gl_text_reset(void) {
   jeux.gl.text.idx_wtr = jeux.gl.text.idx;
 }
 
-static void gl_text_draw(const char *msg, float screen_x, float screen_y, float size) {
+static void gl_text_draw(const char *msg, size_t msg_len, float screen_x, float screen_y, float size) {
   gl_text_Vtx *vtx_wtr = jeux.gl.text.vtx_wtr;
   gl_Tri      *idx_wtr = jeux.gl.text.idx_wtr;
 
-  size *= SDL_GetWindowPixelDensity(jeux.sdl.window);
   float scale = (size / font_BASE_CHAR_SIZE);
 
   float pen_x = screen_x;
-  float pen_y = screen_y;
-  do {
-    font_LetterRegion *l = &font_letter_regions[(size_t)(*msg)];
+  float pen_y = screen_y + size * 0.75f; /* little adjustment */
+  for (int i = 0; i < msg_len; i++) {
+    size_t c = msg[i] | (1 << 5); /* this is a caps-only font, so atlas only has lowercase */
+    font_LetterRegion *l = &font_letter_regions[c];
 
     uint16_t start = vtx_wtr - jeux.gl.text.vtx;
 
     float x = pen_x;
-    float y = pen_y + l->top * scale;
+    float y = pen_y - (l->top) * scale;
+
     float size_x = l->size_x * scale;
     float size_y = l->size_y * scale;
-    *vtx_wtr++ = (gl_text_Vtx) { x + size_x,  y - size_y, l->x + l->size_x, l->y + l->size_y, size };
     *vtx_wtr++ = (gl_text_Vtx) { x + size_x,  y         , l->x + l->size_x, l->y            , size };
+    *vtx_wtr++ = (gl_text_Vtx) { x + size_x,  y + size_y, l->x + l->size_x, l->y + l->size_y, size };
+    *vtx_wtr++ = (gl_text_Vtx) { x         ,  y + size_y, l->x            , l->y + l->size_y, size };
     *vtx_wtr++ = (gl_text_Vtx) { x         ,  y         , l->x            , l->y            , size };
-    *vtx_wtr++ = (gl_text_Vtx) { x         ,  y - size_y, l->x            , l->y + l->size_y, size };
 
     *idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
     *idx_wtr++ = (gl_Tri) { start + 2, start + 3, start + 0 };
 
     pen_x += l->advance * scale;
-  } while (*msg++);
+  }
 
   jeux.gl.text.vtx_wtr = vtx_wtr;
   jeux.gl.text.idx_wtr = idx_wtr;
@@ -1155,6 +1159,18 @@ static void gl_geo_circle(size_t detail, f3 center, float radius, Color color) {
 
     if (i > 0) *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start, start + i, start + i + 1 };
   }
+}
+
+static void gl_geo_box(f3 min, f3 max, Color color) {
+  uint16_t start = jeux.gl.geo.vtx_wtr - jeux.gl.geo.vtx;
+
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { min.x, min.y, min.z }, color };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { min.x, max.y, min.z }, color };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { max.x, max.y, min.z }, color };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { max.x, min.y, min.z }, color };
+
+  *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
+  *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start + 3, start + 2, start + 0 };
 }
 
 static void gl_geo_line(f3 a, f3 b, float thickness, Color color) {
@@ -1240,131 +1256,147 @@ static void gl_geo_box_outline(f3 center, f3 scale, float thickness, Color color
 }
 
 static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
-    for (size_t i = 0; i < rcommands->length; i++) {
-        Clay_RenderCommand *rcmd = Clay_RenderCommandArray_Get(rcommands, i);
-        Clay_BoundingBox rect = rcmd->boundingBox;
+  for (size_t i = 0; i < rcommands->length; i++) {
+    Clay_RenderCommand *rcmd = Clay_RenderCommandArray_Get(rcommands, i);
+    Clay_BoundingBox rect = rcmd->boundingBox;
 
-        switch (rcmd->commandType) {
+    switch (rcmd->commandType) {
 
-            case CLAY_RENDER_COMMAND_TYPE_RECTANGLE: {
-                // Clay_RectangleRenderData *config = &rcmd->renderData.rectangle;
+      case CLAY_RENDER_COMMAND_TYPE_RECTANGLE: {
+        Clay_RectangleRenderData *config = &rcmd->renderData.rectangle;
 
+        gl_geo_box(
+          (f3) { rect.x             , rect.y              , 0.5f },
+          (f3) { rect.x + rect.width, rect.y + rect.height, 0.5f },
+          (Color) {
+            config->backgroundColor.r,
+            config->backgroundColor.g,
+            config->backgroundColor.b,
+            config->backgroundColor.a
+          }
+        );
 
-                // SDL_SetRenderDrawBlendMode(rendererData->renderer, SDL_BLENDMODE_BLEND);
-                // SDL_SetRenderDrawColor(rendererData->renderer, config->backgroundColor.r, config->backgroundColor.g, config->backgroundColor.b, config->backgroundColor.a);
-                // if (config->cornerRadius.topLeft > 0) {
-                //     SDL_Clay_RenderFillRoundedRect(rendererData, rect, config->cornerRadius.topLeft, config->backgroundColor);
-                // } else {
-                //     SDL_RenderFillRect(rendererData->renderer, &rect);
-                // }
-            } break;
+        // SDL_SetRenderDrawBlendMode(rendererData->renderer, SDL_BLENDMODE_BLEND);
+        // SDL_SetRenderDrawColor(rendererData->renderer, );
+        // if (config->cornerRadius.topLeft > 0) {
+        //   SDL_Clay_RenderFillRoundedRect(rendererData, rect, config->cornerRadius.topLeft, config->backgroundColor);
+        // } else {
+        //   SDL_RenderFillRect(rendererData->renderer, &rect);
+        // }
+      } break;
 
-            case CLAY_RENDER_COMMAND_TYPE_TEXT: {
-                Clay_TextRenderData *config = &rcmd->renderData.text;
-                gl_text_draw(config->stringContents.chars, rect.x, rect.y, 24.0f);
+      case CLAY_RENDER_COMMAND_TYPE_TEXT: {
+        Clay_TextRenderData *config = &rcmd->renderData.text;
+        gl_text_draw(
+          config->stringContents.chars,
+          config->stringContents.length,
+          rect.x,
+          rect.y,
+          24.0f
+        );
 
-                // TTF_Font *font = rendererData->fonts[config->fontId];
-                // TTF_Text *text = TTF_CreateText(rendererData->textEngine, font, config->stringContents.chars, config->stringContents.length);
-                // TTF_SetTextColor(text, config->textColor.r, config->textColor.g, config->textColor.b, config->textColor.a);
-                // TTF_DrawRendererText(text, rect.x, rect.y);
-                // TTF_DestroyText(text);
-            } break;
+        // TTF_Font *font = rendererData->fonts[config->fontId];
+        // TTF_Text *text = TTF_CreateText(rendererData->textEngine, font, config->stringContents.chars, config->stringContents.length);
+        // TTF_SetTextColor(text, config->textColor.r, config->textColor.g, config->textColor.b, config->textColor.a);
+        // TTF_DrawRendererText(text, rect.x, rect.y);
+        // TTF_DestroyText(text);
+      } break;
 
-            case CLAY_RENDER_COMMAND_TYPE_BORDER: {
-                // Clay_BorderRenderData *config = &rcmd->renderData.border;
+      case CLAY_RENDER_COMMAND_TYPE_BORDER: {
+        // Clay_BorderRenderData *config = &rcmd->renderData.border;
 
-                // const float minRadius = SDL_min(rect.w, rect.h) / 2.0f;
-                // const Clay_CornerRadius clampedRadii = {
-                //     .topLeft = SDL_min(config->cornerRadius.topLeft, minRadius),
-                //     .topRight = SDL_min(config->cornerRadius.topRight, minRadius),
-                //     .bottomLeft = SDL_min(config->cornerRadius.bottomLeft, minRadius),
-                //     .bottomRight = SDL_min(config->cornerRadius.bottomRight, minRadius)
-                // };
-                // //edges
-                // SDL_SetRenderDrawColor(rendererData->renderer, config->color.r, config->color.g, config->color.b, config->color.a);
-                // if (config->width.left > 0) {
-                //     const float starting_y = rect.y + clampedRadii.topLeft;
-                //     const float length = rect.h - clampedRadii.topLeft - clampedRadii.bottomLeft;
-                //     SDL_FRect line = { rect.x, starting_y, config->width.left, length };
-                //     SDL_RenderFillRect(rendererData->renderer, &line);
-                // }
-                // if (config->width.right > 0) {
-                //     const float starting_x = rect.x + rect.w - (float)config->width.right;
-                //     const float starting_y = rect.y + clampedRadii.topRight;
-                //     const float length = rect.h - clampedRadii.topRight - clampedRadii.bottomRight;
-                //     SDL_FRect line = { starting_x, starting_y, config->width.right, length };
-                //     SDL_RenderFillRect(rendererData->renderer, &line);
-                // }
-                // if (config->width.top > 0) {
-                //     const float starting_x = rect.x + clampedRadii.topLeft;
-                //     const float length = rect.w - clampedRadii.topLeft - clampedRadii.topRight;
-                //     SDL_FRect line = { starting_x, rect.y, length, config->width.top };
-                //     SDL_RenderFillRect(rendererData->renderer, &line);
-                // }
-                // if (config->width.bottom > 0) {
-                //     const float starting_x = rect.x + clampedRadii.bottomLeft;
-                //     const float starting_y = rect.y + rect.h - (float)config->width.bottom;
-                //     const float length = rect.w - clampedRadii.bottomLeft - clampedRadii.bottomRight;
-                //     SDL_FRect line = { starting_x, starting_y, length, config->width.bottom };
-                //     SDL_SetRenderDrawColor(rendererData->renderer, config->color.r, config->color.g, config->color.b, config->color.a);
-                //     SDL_RenderFillRect(rendererData->renderer, &line);
-                // }
-                // //corners
-                // if (config->cornerRadius.topLeft > 0) {
-                //     const float centerX = rect.x + clampedRadii.topLeft -1;
-                //     const float centerY = rect.y + clampedRadii.topLeft;
-                //     SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.topLeft,
-                //         180.0f, 270.0f, config->width.top, config->color);
-                // }
-                // if (config->cornerRadius.topRight > 0) {
-                //     const float centerX = rect.x + rect.w - clampedRadii.topRight -1;
-                //     const float centerY = rect.y + clampedRadii.topRight;
-                //     SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.topRight,
-                //         270.0f, 360.0f, config->width.top, config->color);
-                // }
-                // if (config->cornerRadius.bottomLeft > 0) {
-                //     const float centerX = rect.x + clampedRadii.bottomLeft -1;
-                //     const float centerY = rect.y + rect.h - clampedRadii.bottomLeft -1;
-                //     SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.bottomLeft,
-                //         90.0f, 180.0f, config->width.bottom, config->color);
-                // }
-                // if (config->cornerRadius.bottomRight > 0) {
-                //     const float centerX = rect.x + rect.w - clampedRadii.bottomRight -1; //TODO: why need to -1 in all calculations???
-                //     const float centerY = rect.y + rect.h - clampedRadii.bottomRight -1;
-                //     SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.bottomRight,
-                //         0.0f, 90.0f, config->width.bottom, config->color);
-                // }
+        // const float minRadius = SDL_min(rect.w, rect.h) / 2.0f;
+        // const Clay_CornerRadius clampedRadii = {
+        //   .topLeft = SDL_min(config->cornerRadius.topLeft, minRadius),
+        //   .topRight = SDL_min(config->cornerRadius.topRight, minRadius),
+        //   .bottomLeft = SDL_min(config->cornerRadius.bottomLeft, minRadius),
+        //   .bottomRight = SDL_min(config->cornerRadius.bottomRight, minRadius)
+        // };
+        // //edges
+        // SDL_SetRenderDrawColor(rendererData->renderer, config->color.r, config->color.g, config->color.b, config->color.a);
+        // if (config->width.left > 0) {
+        //   const float starting_y = rect.y + clampedRadii.topLeft;
+        //   const float length = rect.h - clampedRadii.topLeft - clampedRadii.bottomLeft;
+        //   SDL_FRect line = { rect.x, starting_y, config->width.left, length };
+        //   SDL_RenderFillRect(rendererData->renderer, &line);
+        // }
+        // if (config->width.right > 0) {
+        //   const float starting_x = rect.x + rect.w - (float)config->width.right;
+        //   const float starting_y = rect.y + clampedRadii.topRight;
+        //   const float length = rect.h - clampedRadii.topRight - clampedRadii.bottomRight;
+        //   SDL_FRect line = { starting_x, starting_y, config->width.right, length };
+        //   SDL_RenderFillRect(rendererData->renderer, &line);
+        // }
+        // if (config->width.top > 0) {
+        //   const float starting_x = rect.x + clampedRadii.topLeft;
+        //   const float length = rect.w - clampedRadii.topLeft - clampedRadii.topRight;
+        //   SDL_FRect line = { starting_x, rect.y, length, config->width.top };
+        //   SDL_RenderFillRect(rendererData->renderer, &line);
+        // }
+        // if (config->width.bottom > 0) {
+        //   const float starting_x = rect.x + clampedRadii.bottomLeft;
+        //   const float starting_y = rect.y + rect.h - (float)config->width.bottom;
+        //   const float length = rect.w - clampedRadii.bottomLeft - clampedRadii.bottomRight;
+        //   SDL_FRect line = { starting_x, starting_y, length, config->width.bottom };
+        //   SDL_SetRenderDrawColor(rendererData->renderer, config->color.r, config->color.g, config->color.b, config->color.a);
+        //   SDL_RenderFillRect(rendererData->renderer, &line);
+        // }
+        // //corners
+        // if (config->cornerRadius.topLeft > 0) {
+        //   const float centerX = rect.x + clampedRadii.topLeft -1;
+        //   const float centerY = rect.y + clampedRadii.topLeft;
+        //   SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.topLeft,
+        //     180.0f, 270.0f, config->width.top, config->color);
+        // }
+        // if (config->cornerRadius.topRight > 0) {
+        //   const float centerX = rect.x + rect.w - clampedRadii.topRight -1;
+        //   const float centerY = rect.y + clampedRadii.topRight;
+        //   SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.topRight,
+        //     270.0f, 360.0f, config->width.top, config->color);
+        // }
+        // if (config->cornerRadius.bottomLeft > 0) {
+        //   const float centerX = rect.x + clampedRadii.bottomLeft -1;
+        //   const float centerY = rect.y + rect.h - clampedRadii.bottomLeft -1;
+        //   SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.bottomLeft,
+        //     90.0f, 180.0f, config->width.bottom, config->color);
+        // }
+        // if (config->cornerRadius.bottomRight > 0) {
+        //   const float centerX = rect.x + rect.w - clampedRadii.bottomRight -1; //TODO: why need to -1 in all calculations???
+        //   const float centerY = rect.y + rect.h - clampedRadii.bottomRight -1;
+        //   SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.bottomRight,
+        //     0.0f, 90.0f, config->width.bottom, config->color);
+        // }
 
-            } break;
+      } break;
 
-            case CLAY_RENDER_COMMAND_TYPE_SCISSOR_START: {
-                //Clay_BoundingBox boundingBox = rcmd->boundingBox;
-                //currentClippingRectangle = (SDL_Rect) {
-                //        .x = boundingBox.x,
-                //        .y = boundingBox.y,
-                //        .w = boundingBox.width,
-                //        .h = boundingBox.height,
-                //};
-                //SDL_SetRenderClipRect(rendererData->renderer, &currentClippingRectangle);
-            } break;
+      case CLAY_RENDER_COMMAND_TYPE_SCISSOR_START: {
+        //Clay_BoundingBox boundingBox = rcmd->boundingBox;
+        //currentClippingRectangle = (SDL_Rect) {
+        //    .x = boundingBox.x,
+        //    .y = boundingBox.y,
+        //    .w = boundingBox.width,
+        //    .h = boundingBox.height,
+        //};
+        //SDL_SetRenderClipRect(rendererData->renderer, &currentClippingRectangle);
+      } break;
 
-            case CLAY_RENDER_COMMAND_TYPE_SCISSOR_END: {
-                // SDL_SetRenderClipRect(rendererData->renderer, NULL);
-            } break;
+      case CLAY_RENDER_COMMAND_TYPE_SCISSOR_END: {
+        // SDL_SetRenderClipRect(rendererData->renderer, NULL);
+      } break;
 
-            case CLAY_RENDER_COMMAND_TYPE_IMAGE: {
-                // SDL_Surface *image = (SDL_Surface *)rcmd->renderData.image.imageData;
-                // SDL_Texture *texture = SDL_CreateTextureFromSurface(rendererData->renderer, image);
-                // const SDL_FRect dest = { rect.x, rect.y, rect.w, rect.h };
+      case CLAY_RENDER_COMMAND_TYPE_IMAGE: {
+        // SDL_Surface *image = (SDL_Surface *)rcmd->renderData.image.imageData;
+        // SDL_Texture *texture = SDL_CreateTextureFromSurface(rendererData->renderer, image);
+        // const SDL_FRect dest = { rect.x, rect.y, rect.w, rect.h };
 
-                // SDL_RenderTexture(rendererData->renderer, texture, NULL, &dest);
-                // SDL_DestroyTexture(texture);
-            } break;
+        // SDL_RenderTexture(rendererData->renderer, texture, NULL, &dest);
+        // SDL_DestroyTexture(texture);
+      } break;
 
-            default:
-                SDL_Log("Unknown render command type: %d", rcmd->commandType);
-        }
+      default:
+        SDL_Log("Unknown render command type: %d", rcmd->commandType);
     }
+  }
 }
 
 SDL_AppResult SDL_AppIterate(void *appstate) {
@@ -1429,8 +1461,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     /* ui */
     {
-      // Clay_RenderCommandArray cmds = ClayVideoDemo_CreateLayout(&jeux.gui.demo_data);
-      // gl_draw_clay_commands(&cmds);
+      Clay_RenderCommandArray cmds = ClayVideoDemo_CreateLayout(&jeux.gui.demo_data);
+      gl_draw_clay_commands(&cmds);
     }
 
     /* debug */
@@ -1573,8 +1605,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 #undef joint_pos
     }
 
-    if (1) gl_text_draw(
+    if (0) gl_text_draw(
       "hi! i'm ced?",
+      sizeof("hi! i'm ced?"),
       jeux.win_size_x * 0.5,
       jeux.win_size_y * 0.5,
       24.0f
@@ -1594,6 +1627,10 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
       glEnable(GL_DEPTH_TEST);
       glDepthFunc(GL_LEQUAL);
+
+      /* set up premultiplied alpha */
+      glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+      glEnable(GL_BLEND);
 
       glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -1651,6 +1688,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
        * nothing renders, but only on Windows! */
       glDisable(GL_DEPTH_TEST);
 
+      glDisable(GL_BLEND);
     }
 
     /* stop writing to the framebuffer, start writing to the screen */
@@ -1706,9 +1744,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       }
 
       glBindTexture(GL_TEXTURE_2D, jeux.gl.text.tex);
-      glUniform2f(jeux.gl.text.shader_u_tex_size, font_TEX_SIZE_X, font_TEX_SIZE_Y);
-      glUniform2f(jeux.gl.text.shader_u_win_size, jeux.gl.pp.phys_win_size_x, jeux.gl.pp.phys_win_size_y);
-      glUniform1f(jeux.gl.text.shader_u_buffer, 0.725);
+      glUniform2f(       jeux.gl.text.shader_u_tex_size, font_TEX_SIZE_X, font_TEX_SIZE_Y);
+      glUniformMatrix4fv(jeux.gl.text.shader_u_mvp, 1, 0, jeux.screen.floats);
+      glUniform1f(       jeux.gl.text.shader_u_buffer, 0.725);
 
       /* set up premultiplied alpha */
       glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);

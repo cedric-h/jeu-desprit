@@ -833,7 +833,7 @@ CLAY_DLL_EXPORT Clay_ElementId Clay_GetElementId(Clay_String idString);
 // Generally only used for dynamic strings when CLAY_IDI("stringLiteral", index) can't be used.
 CLAY_DLL_EXPORT Clay_ElementId Clay_GetElementIdWithIndex(Clay_String idString, uint32_t index);
 // Returns layout data such as the final calculated bounding box for an element with a given ID.
-// The returned Clay_ElementData contains a `found` bool that will be true if an element with the provided ID was found.
+// The returned Clay_ElementData contains a \`found\` bool that will be true if an element with the provided ID was found.
 // This ID can be calculated either with CLAY_ID() for string literal IDs, or Clay_GetElementId for dynamic strings.
 CLAY_DLL_EXPORT Clay_ElementData Clay_GetElementData(Clay_ElementId id);
 // Returns true if the pointer position provided by Clay_SetPointerState is within the current element's bounding box.
@@ -847,7 +847,7 @@ CLAY_DLL_EXPORT void Clay_OnHover(void (*onHoverFunction)(Clay_ElementId element
 // This ID can be calculated either with CLAY_ID() for string literal IDs, or Clay_GetElementId for dynamic strings.
 CLAY_DLL_EXPORT bool Clay_PointerOver(Clay_ElementId elementId);
 // Returns data representing the state of the scrolling element with the provided ID.
-// The returned Clay_ScrollContainerData contains a `found` bool that will be true if a scroll element was found with the provided ID.
+// The returned Clay_ScrollContainerData contains a \`found\` bool that will be true if a scroll element was found with the provided ID.
 // An imperative function that returns true if the pointer position provided by Clay_SetPointerState is within the element with the provided ID's bounding box.
 // This ID can be calculated either with CLAY_ID() for string literal IDs, or Clay_GetElementId for dynamic strings.
 CLAY_DLL_EXPORT Clay_ScrollContainerData Clay_GetScrollContainerData(Clay_ElementId id);
