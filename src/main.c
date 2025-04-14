@@ -12,7 +12,6 @@
 
 #define CLAY_IMPLEMENTATION
 #include "clay.h"
-#include "clay_demo.h"
 #include "font.h"
 
 #define GAME_DEBUG true
@@ -245,11 +244,11 @@ static f4x4 f4x4_move(f3 pos) {
 #define ANTIALIAS_FXAA    2
 #define ANTIALIAS_2xSSAA  3
 #define ANTIALIAS_4xSSAA  4
-#define CURRENT_ALIASING ANTIALIAS_FXAA
+#define CURRENT_ALIASING ANTIALIAS_4xSSAA
 #define SRGB
 
-typedef struct { float x, y, z, u, v, size; } gl_text_Vtx;
 typedef struct { uint8_t r, g, b, a; } Color;
+typedef struct { float x, y, z, u, v, size; Color color;} gl_text_Vtx;
 typedef struct {
   f3 pos;
   Color color;
@@ -303,7 +302,7 @@ static struct {
 
   /* input */
   size_t win_size_x, win_size_y;
-  float mouse_screen_x, mouse_screen_y;
+  float mouse_screen_x, mouse_screen_y, mouse_lmb_down;
   /* mouse projected onto the ground plane at z=0
    * used for aiming weapons, picking up/dropping things from inventory etc. */
   f3 mouse_ground;
@@ -395,13 +394,10 @@ static struct {
       GLint shader_a_pos;
       GLint shader_a_uv;
       GLint shader_a_size;
+      GLint shader_a_color;
     } text;
 
   } gl;
-
-  struct {
-    ClayVideoDemo_Data demo_data;
-  } gui;
 
 } jeux = {
   .win_size_x = 800,
@@ -441,7 +437,8 @@ static Clay_Dimensions gui_measure_text(Clay_StringSlice text, Clay_TextElementC
     char c = text.chars[i] | (1 << 5); /* this is a caps-only font, so atlas only has lowercase */
     font_LetterRegion *l = &font_letter_regions[(size_t)(c)];
 
-    size_x += l->advance * scale;
+    /* for the last character, don't add its advance - we aren't writing more after it */
+    size_x += ((i == (text.length-1)) ? l->size_x : l->advance) * scale;
     size_y = fmaxf(size_y, l->size_y * scale);
   }
 
@@ -502,8 +499,6 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
       (Clay_ErrorHandler) { gui_handle_errors }
     );
     Clay_SetMeasureTextFunction(gui_measure_text, NULL);
-
-    jeux.gui.demo_data = ClayVideoDemo_Initialize();
   }
 
   return gl_init();
@@ -511,58 +506,49 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 
 static void gl_resize(void);
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
-  if (event->type == SDL_EVENT_QUIT) return SDL_APP_SUCCESS;
+  /* window lifecycle */
+  {
+    if (event->type == SDL_EVENT_QUIT) return SDL_APP_SUCCESS;
 
-  if (event->type == SDL_EVENT_MOUSE_MOTION) {
-    jeux.mouse_screen_x = event->motion.x;
-    jeux.mouse_screen_y = event->motion.y;
-  }
+    if (event->type == SDL_EVENT_WINDOW_RESIZED) {
+      jeux.win_size_x = event->window.data1;
+      jeux.win_size_y = event->window.data2;
+      gl_resize();
 
-  if (event->type == SDL_EVENT_WINDOW_RESIZED) {
-    jeux.win_size_x = event->window.data1;
-    jeux.win_size_y = event->window.data2;
-    gl_resize();
-  }
-
-  if (event->type == SDL_EVENT_KEY_UP) {
-#if GAME_DEBUG
-    if (event->key.key == SDLK_ESCAPE) {
-      return SDL_APP_SUCCESS;
-    }
-#endif
-  }
-
-  /* clay event handling */
-  switch (event->type) {
-
-    case SDL_EVENT_WINDOW_RESIZED: {
       Clay_SetLayoutDimensions(
-        (Clay_Dimensions) { (float) event->window.data1, (float) event->window.data2 }
+        (Clay_Dimensions) {
+          (float) event->window.data1,
+          (float) event->window.data2
+        }
       );
-    } break;
+    }
+  }
 
-    case SDL_EVENT_MOUSE_MOTION: {
-      Clay_SetPointerState(
-        (Clay_Vector2) { event->motion.x, event->motion.y },
-        event->motion.state & SDL_BUTTON_LMASK
-      );
-    } break;
-
-    case SDL_EVENT_MOUSE_BUTTON_DOWN: {
-      Clay_SetPointerState(
-        (Clay_Vector2) { event->button.x, event->button.y },
-        event->button.button == SDL_BUTTON_LEFT
-      );
-    } break;
-
-    case SDL_EVENT_MOUSE_WHEEL: {
+  /* mouse/keyboard input */
+  {
+    if (event->type == SDL_EVENT_MOUSE_BUTTON_UP) {
+      jeux.mouse_lmb_down = !(event->button.button == SDL_BUTTON_LEFT);
+    }
+    if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+      jeux.mouse_lmb_down = event->button.button == SDL_BUTTON_LEFT;
+      // jeux.mouse_lmb_down_x = event->button.x;
+      // jeux.mouse_lmb_down_y = event->button.y;
+    }
+    if (event->type == SDL_EVENT_MOUSE_MOTION) {
+      jeux.mouse_screen_x = event->motion.x;
+      jeux.mouse_screen_y = event->motion.y;
+    }
+    if (event->type == SDL_EVENT_MOUSE_WHEEL) {
       Clay_UpdateScrollContainers(true, (Clay_Vector2) { event->wheel.x, event->wheel.y }, 0.01f);
-    } break;
-
-    default: {
-    } break;
-
-  };
+    }
+    if (event->type == SDL_EVENT_KEY_UP) {
+#if GAME_DEBUG
+      if (event->key.key == SDLK_ESCAPE) {
+        return SDL_APP_SUCCESS;
+      }
+#endif
+    }
+  }
 
   return SDL_APP_CONTINUE;
 }
@@ -615,14 +601,15 @@ static SDL_AppResult gl_init(void) {
           /* debug normals */
           // "  gl_FragColor = vec4(mix(vec3(1), v_normal, 0.5), 1.0);\n"
 
+          // use normal color if no normals at all */
+          "  if (abs(dot(v_normal, vec3(1))) < 0.00001) { gl_FragColor = v_color; return; }\n"
+
           "  vec3 light_dir = normalize(vec3(4.0, 1.5, 5.9));\n"
           "  float diffuse = max(dot(v_normal, light_dir), 0.0);\n"
           "  float ramp = 0.0;\n"
           "       if (diffuse > 0.923) ramp = 1.00;\n"
           "  else if (diffuse > 0.477) ramp = 0.50;\n"
-          "  vec3 desaturated = vec3(dot(v_color.xyz, vec3(0.2126, 0.7152, 0.0722)));\n"
-          "  vec3 color = mix(desaturated, v_color.xyz, min(1.0, 0.2 + ramp));\n"
-          "  gl_FragColor = vec4(color * mix(0.8, 1.6, ramp), v_color.a);\n"
+          "  gl_FragColor = vec4(v_color.xyz * mix(0.8, 1.6, ramp), v_color.a);\n"
           "}\n"
       },
       {
@@ -632,6 +619,7 @@ static SDL_AppResult gl_init(void) {
           "attribute vec3 a_pos;\n"
           "attribute vec2 a_uv;\n"
           "attribute float a_size;\n"
+          "attribute vec4 a_color;\n"
           "\n"
           "uniform mat4 u_mvp;\n"
           "uniform vec2 u_tex_size;\n"
@@ -639,9 +627,11 @@ static SDL_AppResult gl_init(void) {
           "\n"
           "varying vec2 v_uv;\n"
           "varying float v_gamma;\n"
+          "varying vec4 v_color;\n"
           "\n"
           "void main() {\n"
           "  gl_Position = u_mvp * vec4(a_pos, 1.0);\n"
+          "  v_color = a_color;\n"
           "  v_uv = a_uv / u_tex_size;\n"
           "  v_gamma = u_gamma / a_size;\n"
           "}\n"
@@ -651,6 +641,7 @@ static SDL_AppResult gl_init(void) {
           "\n"
           "varying vec2 v_uv;\n"
           "varying float v_gamma;\n"
+          "varying vec4 v_color;\n"
           "\n"
           "uniform sampler2D u_tex;\n"
           "uniform float u_buffer;\n"
@@ -658,7 +649,7 @@ static SDL_AppResult gl_init(void) {
           "void main() {\n"
           "  float dist = texture2D(u_tex, v_uv).r;\n"
           "  float alpha = smoothstep(u_buffer - v_gamma, u_buffer + v_gamma, dist);\n"
-          "  gl_FragColor = vec4(alpha);\n"
+          "  gl_FragColor = v_color * v_color.a * alpha;\n"
           "}\n"
       },
       {
@@ -921,6 +912,19 @@ static SDL_AppResult gl_init(void) {
       for (int vtx_i = 0; vtx_i < vtx_count; vtx_i++) {
         gl_geo_Vtx *v = vtx + vtx_i;
         v->color.a = 255;
+
+        if (i == gl_Model_IntroGravestoneTerrain) {
+          float desaturation = 0.4; /* 0 .. 1 */
+
+          float r = (float)v->color.r / 255.0f;
+          float g = (float)v->color.g / 255.0f;
+          float b = (float)v->color.b / 255.0f;
+          float luma = (r * 0.2126) + (g * 0.7152) + (b * 0.0722);
+          r = lerp(r, luma, desaturation) * 255.0f;
+          g = lerp(g, luma, desaturation) * 255.0f;
+          b = lerp(b, luma, desaturation) * 255.0f;
+          v->color = (Color) { r, g, b, 255 };
+        }
       }
 
       glGenBuffers(1, &jeux.gl.geo.static_models[i].buf_vtx);
@@ -997,6 +1001,7 @@ static SDL_AppResult gl_init(void) {
       jeux.gl.text.shader_a_pos      = glGetAttribLocation( jeux.gl.text.shader, "a_pos"     );
       jeux.gl.text.shader_a_uv       = glGetAttribLocation( jeux.gl.text.shader, "a_uv"      );
       jeux.gl.text.shader_a_size     = glGetAttribLocation( jeux.gl.text.shader, "a_size"    );
+      jeux.gl.text.shader_a_color    = glGetAttribLocation( jeux.gl.text.shader, "a_color"   );
     }
 
     /* create texture - writes to jeux.gl.tex */
@@ -1156,10 +1161,11 @@ static void gl_text_draw(const char *msg, float screen_x, float screen_y, float 
 
     float size_x = l->size_x * scale;
     float size_y = l->size_y * scale;
-    *vtx_wtr++ = (gl_text_Vtx) { x + size_x,  y         , 0.999f, l->x + l->size_x, l->y            , size };
-    *vtx_wtr++ = (gl_text_Vtx) { x + size_x,  y + size_y, 0.999f, l->x + l->size_x, l->y + l->size_y, size };
-    *vtx_wtr++ = (gl_text_Vtx) { x         ,  y + size_y, 0.999f, l->x            , l->y + l->size_y, size };
-    *vtx_wtr++ = (gl_text_Vtx) { x         ,  y         , 0.999f, l->x            , l->y            , size };
+    Color color = { 255, 255, 255, 255 };
+    *vtx_wtr++ = (gl_text_Vtx) { x + size_x,  y         , 0.999f, l->x + l->size_x, l->y            , size, color };
+    *vtx_wtr++ = (gl_text_Vtx) { x + size_x,  y + size_y, 0.999f, l->x + l->size_x, l->y + l->size_y, size, color };
+    *vtx_wtr++ = (gl_text_Vtx) { x         ,  y + size_y, 0.999f, l->x            , l->y + l->size_y, size, color };
+    *vtx_wtr++ = (gl_text_Vtx) { x         ,  y         , 0.999f, l->x            , l->y            , size, color };
 
     *idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
     *idx_wtr++ = (gl_Tri) { start + 2, start + 3, start + 0 };
@@ -1236,10 +1242,10 @@ static void gl_text_draw_ex(
       }
     }
 
-    *vtx_wtr++ = (gl_text_Vtx) { max_x, min_y, pos.z, max_u, min_v, size };
-    *vtx_wtr++ = (gl_text_Vtx) { max_x, max_y, pos.z, max_u, max_v, size };
-    *vtx_wtr++ = (gl_text_Vtx) { min_x, max_y, pos.z, min_u, max_v, size };
-    *vtx_wtr++ = (gl_text_Vtx) { min_x, min_y, pos.z, min_u, min_v, size };
+    *vtx_wtr++ = (gl_text_Vtx) { max_x, min_y, pos.z, max_u, min_v, size, color };
+    *vtx_wtr++ = (gl_text_Vtx) { max_x, max_y, pos.z, max_u, max_v, size, color };
+    *vtx_wtr++ = (gl_text_Vtx) { min_x, max_y, pos.z, min_u, max_v, size, color };
+    *vtx_wtr++ = (gl_text_Vtx) { min_x, min_y, pos.z, min_u, min_v, size, color };
 
     *idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
     *idx_wtr++ = (gl_Tri) { start + 2, start + 3, start + 0 };
@@ -1445,6 +1451,11 @@ static void gl_geo_box3_outline(f3 center, f3 scale, float thickness, Color colo
  *      as things in the 3D scene, so we can easily draw the character in your inventory.
  *
  *  [x] UI is at z=0.99, draw over that to draw over the UI.
+ *
+ *  [x] Even though our text is arbitrarily resizable, Clay's fontSize is a uint16_t, so
+ *      the text ends up getting truncated. This is trivial to tweak in clay.h, but the
+ *      layouting still treats the text as if it were uint16_t (meaning your text scales
+ *      up gracefully, but the layout around it increases and decreases in clear 1px chunks)
  */
 static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
   Box2 clip = BOX2_UNCONSTRAINED;
@@ -1510,7 +1521,7 @@ static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
           config->stringContents.chars,
           config->stringContents.length,
           (f3) { rect.x, rect.y, ui_z },
-          config->fontSize,
+          roundf(config->fontSize),
           clip,
           (Color) {
             config->textColor.r,
@@ -1665,7 +1676,69 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     /* ui */
     {
-      Clay_RenderCommandArray cmds = ClayVideoDemo_CreateLayout(&jeux.gui.demo_data);
+      Clay_RenderCommandArray cmds;
+
+      {
+        Clay_SetPointerState(
+          (Clay_Vector2) { jeux.mouse_screen_x, jeux.mouse_screen_y },
+          jeux.mouse_lmb_down
+        );
+
+        Clay_BeginLayout();
+
+        static struct {
+          struct {
+            bool open;
+          } options;
+        } gui = { 0 };
+
+        /* HUD */
+        {
+          CLAY({
+            .id = CLAY_ID("HeaderBar"),
+            .layout = {
+              .sizing = { .width = CLAY_SIZING_GROW(0) },
+              .padding = { 2, 2, 2, 2 },
+              .childGap = 16,
+              .childAlignment = { .y = CLAY_ALIGN_Y_CENTER }
+            },
+          }) {
+            CLAY({
+              .id = CLAY_ID("OptionsToggle"),
+              .border = { .color = { 58, 31, 7, 155 }, .width = { 2, 2, 2, 2 }},
+              .backgroundColor = Clay_Hovered() ? (Clay_Color) { 255, 255, 255, 255 }
+                                                : (Clay_Color) { 205, 205, 205, 255 },
+              .layout.sizing = { CLAY_SIZING_FIXED(30), CLAY_SIZING_FIXED(30) },
+              .cornerRadius = CLAY_CORNER_RADIUS(15)
+            }) {
+              bool mouse_down = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_PRESSED_THIS_FRAME;
+              if (Clay_Hovered() && mouse_down) {
+                gui.options.open ^= 1;
+                SDL_Log("hover! %d\n", gui.options.open);
+              }
+              /* icon here */
+
+            }
+          }
+        }
+
+        /* options window */
+        if (gui.options.open) {
+          CLAY({
+            .id = CLAY_ID("OptionsWindow"),
+            .layout.padding = { 8, 8, 8, 8 },
+            .backgroundColor = (Clay_Color) { 255, 255, 255, 255 },
+          }) {
+            CLAY_TEXT(CLAY_STRING("Options"), CLAY_TEXT_CONFIG({
+                .fontSize = 16,
+                .textColor = { 0, 0, 0, 255 }
+            }));
+          }
+        }
+
+        cmds = Clay_EndLayout();
+      }
+
       gl_draw_clay_commands(&cmds);
     }
 
@@ -1960,6 +2033,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
         glEnableVertexAttribArray(jeux.gl.text.shader_a_size);
         glVertexAttribPointer(jeux.gl.text.shader_a_size, 1, GL_FLOAT, GL_FALSE, size, (void *)offsetof(gl_text_Vtx, size));
+
+        glEnableVertexAttribArray(jeux.gl.text.shader_a_color);
+        glVertexAttribPointer(jeux.gl.text.shader_a_color, 4, GL_UNSIGNED_BYTE, GL_TRUE, size, (void *)offsetof(gl_text_Vtx, color));
       }
 
       glBindTexture(GL_TEXTURE_2D, jeux.gl.text.tex);
