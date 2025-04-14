@@ -248,7 +248,7 @@ static f4x4 f4x4_move(f3 pos) {
 #define CURRENT_ALIASING ANTIALIAS_4xSSAA
 #define SRGB
 
-typedef struct { float x, y, u, v, size; } gl_text_Vtx;
+typedef struct { float x, y, z, u, v, size; } gl_text_Vtx;
 typedef struct { uint8_t r, g, b, a; } Color;
 typedef struct {
   f3 pos;
@@ -322,10 +322,10 @@ static struct {
 
   struct {
     struct {
-      gl_geo_Vtx vtx[999];
+      gl_geo_Vtx vtx[9999];
       gl_geo_Vtx *vtx_wtr;
 
-      gl_Tri idx[999];
+      gl_Tri idx[9999];
       gl_Tri *idx_wtr;
 
       GLuint buf_vtx;
@@ -374,10 +374,10 @@ static struct {
     } pp;
 
     struct {
-      gl_text_Vtx vtx[999999];
+      gl_text_Vtx vtx[9999];
       gl_text_Vtx *vtx_wtr;
 
-      gl_Tri idx[999999];
+      gl_Tri idx[9999];
       gl_Tri *idx_wtr;
 
       GLuint buf_vtx;
@@ -414,6 +414,18 @@ static struct {
 #endif
   }
 };
+
+/* these are useful for rendering, picking etc. */
+static f3 jeux_world_to_screen(f3 p) {
+  p = f4x4_transform_f3(jeux.camera, p);
+  p = f4x4_transform_f3(f4x4_invert(jeux.screen), p);
+  return p;
+}
+static f3 jeux_screen_to_world(f3 p) {
+  p = f4x4_transform_f3(jeux.screen, p);
+  p = f4x4_transform_f3(f4x4_invert(jeux.camera), p);
+  return p;
+}
 
 static SDL_AppResult gl_init(void);
 static void gui_handle_errors(Clay_ErrorData error_data) { SDL_Log("%s\n", error_data.errorText.chars); }
@@ -615,7 +627,7 @@ static SDL_AppResult gl_init(void) {
         .dst = &jeux.gl.text.shader,
         .debug_name = "text",
         .vs =
-          "attribute vec2 a_pos;\n"
+          "attribute vec3 a_pos;\n"
           "attribute vec2 a_uv;\n"
           "attribute float a_size;\n"
           "\n"
@@ -627,7 +639,7 @@ static SDL_AppResult gl_init(void) {
           "varying float v_gamma;\n"
           "\n"
           "void main() {\n"
-          "  gl_Position = u_mvp * vec4(a_pos, 0.0, 1.0);\n"
+          "  gl_Position = u_mvp * vec4(a_pos, 1.0);\n"
           "  v_uv = a_uv / u_tex_size;\n"
           "  v_gamma = u_gamma / a_size;\n"
           "}\n"
@@ -654,7 +666,7 @@ static SDL_AppResult gl_init(void) {
           "attribute vec4 a_pos;\n"
           "varying vec2 v_uv;\n"
           "void main() {\n"
-          "  gl_Position = vec4(a_pos.xyz, 1.0);\n"
+          "  gl_Position = vec4(a_pos.xy, 0.0, 1.0);\n"
           "  v_uv = gl_Position.xy*0.5 + vec2(0.5);\n"
           "}\n"
         ,
@@ -1140,10 +1152,10 @@ static void gl_text_draw(const char *msg, float screen_x, float screen_y, float 
 
     float size_x = l->size_x * scale;
     float size_y = l->size_y * scale;
-    *vtx_wtr++ = (gl_text_Vtx) { x + size_x,  y         , l->x + l->size_x, l->y            , size };
-    *vtx_wtr++ = (gl_text_Vtx) { x + size_x,  y + size_y, l->x + l->size_x, l->y + l->size_y, size };
-    *vtx_wtr++ = (gl_text_Vtx) { x         ,  y + size_y, l->x            , l->y + l->size_y, size };
-    *vtx_wtr++ = (gl_text_Vtx) { x         ,  y         , l->x            , l->y            , size };
+    *vtx_wtr++ = (gl_text_Vtx) { x + size_x,  y         , 0.999f, l->x + l->size_x, l->y            , size };
+    *vtx_wtr++ = (gl_text_Vtx) { x + size_x,  y + size_y, 0.999f, l->x + l->size_x, l->y + l->size_y, size };
+    *vtx_wtr++ = (gl_text_Vtx) { x         ,  y + size_y, 0.999f, l->x            , l->y + l->size_y, size };
+    *vtx_wtr++ = (gl_text_Vtx) { x         ,  y         , 0.999f, l->x            , l->y            , size };
 
     *idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
     *idx_wtr++ = (gl_Tri) { start + 2, start + 3, start + 0 };
@@ -1159,8 +1171,7 @@ static void gl_text_draw(const char *msg, float screen_x, float screen_y, float 
 static void gl_text_draw_ex(
   const char *msg,
   size_t msg_len,
-  float screen_x,
-  float screen_y,
+  f3 pos,
   float size,
   Box2 clip,
   Color color
@@ -1170,8 +1181,8 @@ static void gl_text_draw_ex(
 
   float scale = (size / font_BASE_CHAR_SIZE);
 
-  float pen_x = screen_x;
-  float pen_y = screen_y + size * 0.75f; /* little adjustment */
+  float pen_x = pos.x;
+  float pen_y = pos.y + size * 0.75f; /* little adjustment */
   for (int i = 0; i < msg_len; i++) {
     size_t c = msg[i] | (1 << 5); /* this is a caps-only font, so atlas only has lowercase */
     font_LetterRegion *l = &font_letter_regions[c];
@@ -1221,10 +1232,10 @@ static void gl_text_draw_ex(
       }
     }
 
-    *vtx_wtr++ = (gl_text_Vtx) { max_x, min_y, max_u, min_v, size };
-    *vtx_wtr++ = (gl_text_Vtx) { max_x, max_y, max_u, max_v, size };
-    *vtx_wtr++ = (gl_text_Vtx) { min_x, max_y, min_u, max_v, size };
-    *vtx_wtr++ = (gl_text_Vtx) { min_x, min_y, min_u, min_v, size };
+    *vtx_wtr++ = (gl_text_Vtx) { max_x, min_y, pos.z, max_u, min_v, size };
+    *vtx_wtr++ = (gl_text_Vtx) { max_x, max_y, pos.z, max_u, max_v, size };
+    *vtx_wtr++ = (gl_text_Vtx) { min_x, max_y, pos.z, min_u, max_v, size };
+    *vtx_wtr++ = (gl_text_Vtx) { min_x, min_y, pos.z, min_u, min_v, size };
 
     *idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
     *idx_wtr++ = (gl_Tri) { start + 2, start + 3, start + 0 };
@@ -1242,15 +1253,21 @@ static void gl_geo_reset(void) {
   jeux.gl.geo.model_draws_wtr = jeux.gl.geo.model_draws;
 }
 
-static void gl_geo_circle(size_t detail, f3 center, float radius, Color color) {
-
+static void gl_geo_arc(
+  float radians_from,
+  float radians_to,
+  size_t detail,
+  f3 center,
+  float radius,
+  Color color
+) {
   uint16_t start = jeux.gl.geo.vtx_wtr - jeux.gl.geo.vtx;
 
   /* center of the triangle fan */
   *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { .pos = center, .color = color };
 
   for (int i = 0; i <= detail; i++) {
-    float t = (float)i / (float)detail * M_PI * 2.0f;
+    float t = lerp(radians_from, radians_to, (float)i / (float)detail);
     float x = center.x + cosf(t) * radius;
     float y = center.y + sinf(t) * radius;
     *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { x, y, center.z }, color };
@@ -1259,16 +1276,15 @@ static void gl_geo_circle(size_t detail, f3 center, float radius, Color color) {
   }
 }
 
-static void gl_geo_box(f3 min, f3 max, Color color) {
-  uint16_t start = jeux.gl.geo.vtx_wtr - jeux.gl.geo.vtx;
-
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { min.x, min.y, min.z }, color };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { min.x, max.y, min.z }, color };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { max.x, max.y, min.z }, color };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { max.x, min.y, min.z }, color };
-
-  *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
-  *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start + 3, start + 2, start + 0 };
+static void gl_geo_circle(size_t detail, f3 center, float radius, Color color) {
+  gl_geo_arc(
+    0.0f,
+    M_PI * 2.0f,
+    detail,
+    center,
+    radius,
+    color
+  );
 }
 
 static void gl_geo_line(f3 a, f3 b, float thickness, Color color) {
@@ -1291,22 +1307,80 @@ static void gl_geo_line(f3 a, f3 b, float thickness, Color color) {
   *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start + 2, start + 1, start + 3 };
 }
 
-static f3 jeux_world_to_screen(f3 p) {
-  p = f4x4_transform_f3(jeux.camera, p);
-  /* p is in -1 .. 1 now */
-  p = f4x4_transform_f3(f4x4_invert(jeux.screen), p);
-  return p;
+static void gl_geo_box(f3 min, f3 max, Color color) {
+  uint16_t start = jeux.gl.geo.vtx_wtr - jeux.gl.geo.vtx;
+
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { min.x, min.y, min.z }, color };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { min.x, max.y, min.z }, color };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { max.x, max.y, min.z }, color };
+  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { max.x, min.y, min.z }, color };
+
+  *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
+  *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start + 3, start + 2, start + 0 };
 }
 
-static f3 jeux_screen_to_world(f3 p) {
-  /* p is in -1 .. 1 now */
-  p = f4x4_transform_f3(jeux.screen, p);
-
-  p = f4x4_transform_f3(f4x4_invert(jeux.camera), p);
-  return p;
+static void gl_geo_box2_outline(f3 min, f3 max, float thickness, Color color) {
+  float t = thickness;
+  float h = thickness * 0.5;
+  Color c = color;
+  gl_geo_line((f3) { min.x - h, min.y, min.z }, (f3) { max.x + h, min.y, min.z }, t, c);
+  gl_geo_line((f3) { min.x    , max.y, min.z }, (f3) { min.x    , min.y, min.z }, t, c);
+  gl_geo_line((f3) { max.x + h, max.y, min.z }, (f3) { min.x - h, max.y, min.z }, t, c);
+  gl_geo_line((f3) { max.x    , min.y, min.z }, (f3) { max.x    , max.y, min.z }, t, c);
 }
 
-static void gl_geo_ring(size_t detail, f3 center, float radius, float thickness, Color color) {
+static void gl_geo_ring2_arc(
+  float radians_from,
+  float radians_to,
+  size_t detail,
+  f3 center,
+  float radius,
+  float thickness,
+  Color color
+) {
+  for (int i = 0; i < detail; i++) {
+    float t0 = lerp(radians_from, radians_to, (float)i / (float)detail);
+    float x0 = center.x + cosf(t0) * radius;
+    float y0 = center.y + sinf(t0) * radius;
+
+    float t1 = lerp(radians_from, radians_to, (float)(i + 1) / (float)detail);
+    float x1 = center.x + cosf(t1) * radius;
+    float y1 = center.y + sinf(t1) * radius;
+
+    gl_geo_line(
+      (f3) { x0, y0, center.z },
+      (f3) { x1, y1, center.z },
+      thickness,
+      color
+    );
+  }
+}
+
+static void gl_geo_ring2(
+  size_t detail,
+  f3 center,
+  float radius,
+  float thickness,
+  Color color
+) {
+  gl_geo_ring2_arc(
+    0.0f,
+    M_PI * 2.0f,
+    detail,
+    center,
+    radius,
+    thickness,
+    color
+  );
+}
+
+static void gl_geo_ring3(
+  size_t detail,
+  f3 center,
+  float radius,
+  float thickness,
+  Color color
+) {
   for (int i = 0; i < detail; i++) {
     float t0 = (float)i / (float)detail * M_PI * 2.0f;
     float x0 = center.x + cosf(t0) * radius;
@@ -1325,7 +1399,7 @@ static void gl_geo_ring(size_t detail, f3 center, float radius, float thickness,
   }
 }
 
-static void gl_geo_box_outline(f3 center, f3 scale, float thickness, Color color) {
+static void gl_geo_box3_outline(f3 center, f3 scale, float thickness, Color color) {
 
   for (float dir_x = 0; dir_x < 2; dir_x++) {
     for (float dir_y = -1; dir_y <= 1; dir_y += 2) {
@@ -1353,8 +1427,25 @@ static void gl_geo_box_outline(f3 center, f3 scale, float thickness, Color color
   }
 }
 
+/**
+ * WARNING: This Clay renderer has "character":
+ *
+ *  [x] We only take into account cornerRadius.topLeft. Other corners? Fuck 'em.
+ *
+ *  [x] 2 draw calls, one for all UI, one afterwards for text.
+ *      (Text has its own AA, so it happens after postprocessing.)
+ *
+ *  [x] We reproject UVs instead of using scissor. (this allows just 2 draw calls)
+ *
+ *  [x] The first pass that draws shapes uses the same geometry buffers and shaders
+ *      as things in the 3D scene, so we can easily draw the character in your inventory.
+ *
+ *  [x] UI is at z=0.99, draw over that to draw over the UI.
+ */
 static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
   Box2 clip = BOX2_UNCONSTRAINED;
+  float ui_z = 0.0f;
+  float ui_z_bump = 0.01f;
 
   for (size_t i = 0; i < rcommands->length; i++) {
     Clay_RenderCommand *rcmd = Clay_RenderCommandArray_Get(rcommands, i);
@@ -1365,19 +1456,48 @@ static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
       case CLAY_RENDER_COMMAND_TYPE_RECTANGLE: {
         Clay_RectangleRenderData *config = &rcmd->renderData.rectangle;
 
-        gl_geo_box(
-          (f3) { rect.x             , rect.y              , 0.5f },
-          (f3) { rect.x + rect.width, rect.y + rect.height, 0.5f },
-          (Color) {
-            config->backgroundColor.r,
-            config->backgroundColor.g,
-            config->backgroundColor.b,
-            config->backgroundColor.a
-          }
-        );
+        f3 min = { rect.x             , rect.y              , ui_z };
+        f3 max = { rect.x + rect.width, rect.y + rect.height, ui_z };
+        Color color = {
+          config->backgroundColor.r,
+          config->backgroundColor.g,
+          config->backgroundColor.b,
+          config->backgroundColor.a
+        };
 
-        /* NOTE: we're ignoring
-         * config->cornerRadius.topLeft */
+        if (config->cornerRadius.topLeft == 0.0f) {
+          gl_geo_box(
+            (f3) { min.x, min.y, ui_z },
+            (f3) { max.x, max.y, ui_z },
+            color
+          );
+        } else {
+          float r = config->cornerRadius.topLeft;
+
+          /* corner arcs */
+          {
+            float q = M_PI * 0.5f;
+            gl_geo_arc(2*q, 3*q, 16, (f3) { min.x + r, min.y + r, ui_z }, r, color);
+            gl_geo_arc(1*q, 2*q, 16, (f3) { min.x + r, max.y - r, ui_z }, r, color);
+            gl_geo_arc(3*q, 4*q, 16, (f3) { max.x - r, min.y + r, ui_z }, r, color);
+            gl_geo_arc(0*q, 1*q, 16, (f3) { max.x - r, max.y - r, ui_z }, r, color);
+          }
+
+          /* min and max inset by radius */
+          f3 rmin = { min.x + r, min.y + r, ui_z };
+          f3 rmax = { max.x - r, max.y - r, ui_z };
+          gl_geo_box(rmin, rmax, color);
+
+          float h = r * 0.5f;
+          rmin = (f3) { min.x + h, min.y + h, ui_z };
+          rmax = (f3) { max.x - h, max.y - h, ui_z };
+          gl_geo_line((f3) { rmin.x+h, rmin.y  , ui_z }, (f3) { rmax.x-h, rmin.y  , ui_z }, r, color);
+          gl_geo_line((f3) { rmin.x  , rmax.y-h, ui_z }, (f3) { rmin.x  , rmin.y+h, ui_z }, r, color);
+          gl_geo_line((f3) { rmax.x-h, rmax.y  , ui_z }, (f3) { rmin.x+h, rmax.y  , ui_z }, r, color);
+          gl_geo_line((f3) { rmax.x  , rmin.y+h, ui_z }, (f3) { rmax.x  , rmax.y-h, ui_z }, r, color);
+        }
+
+        ui_z += ui_z_bump;
       } break;
 
       case CLAY_RENDER_COMMAND_TYPE_TEXT: {
@@ -1385,8 +1505,7 @@ static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
         gl_text_draw_ex(
           config->stringContents.chars,
           config->stringContents.length,
-          rect.x,
-          rect.y,
+          (f3) { rect.x, rect.y, ui_z },
           config->fontSize,
           clip,
           (Color) {
@@ -1399,69 +1518,62 @@ static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
       } break;
 
       case CLAY_RENDER_COMMAND_TYPE_BORDER: {
-        // Clay_BorderRenderData *config = &rcmd->renderData.border;
+        Clay_BorderRenderData *config = &rcmd->renderData.border;
+        Color color = {
+          config->color.r,
+          config->color.g,
+          config->color.b,
+          config->color.a
+        };
 
-        // const float minRadius = SDL_min(rect.w, rect.h) / 2.0f;
-        // const Clay_CornerRadius clampedRadii = {
-        //   .topLeft = SDL_min(config->cornerRadius.topLeft, minRadius),
-        //   .topRight = SDL_min(config->cornerRadius.topRight, minRadius),
-        //   .bottomLeft = SDL_min(config->cornerRadius.bottomLeft, minRadius),
-        //   .bottomRight = SDL_min(config->cornerRadius.bottomRight, minRadius)
-        // };
-        // //edges
-        // SDL_SetRenderDrawColor(rendererData->renderer, config->color.r, config->color.g, config->color.b, config->color.a);
-        // if (config->width.left > 0) {
-        //   const float starting_y = rect.y + clampedRadii.topLeft;
-        //   const float length = rect.h - clampedRadii.topLeft - clampedRadii.bottomLeft;
-        //   SDL_FRect line = { rect.x, starting_y, config->width.left, length };
-        //   SDL_RenderFillRect(rendererData->renderer, &line);
-        // }
-        // if (config->width.right > 0) {
-        //   const float starting_x = rect.x + rect.w - (float)config->width.right;
-        //   const float starting_y = rect.y + clampedRadii.topRight;
-        //   const float length = rect.h - clampedRadii.topRight - clampedRadii.bottomRight;
-        //   SDL_FRect line = { starting_x, starting_y, config->width.right, length };
-        //   SDL_RenderFillRect(rendererData->renderer, &line);
-        // }
-        // if (config->width.top > 0) {
-        //   const float starting_x = rect.x + clampedRadii.topLeft;
-        //   const float length = rect.w - clampedRadii.topLeft - clampedRadii.topRight;
-        //   SDL_FRect line = { starting_x, rect.y, length, config->width.top };
-        //   SDL_RenderFillRect(rendererData->renderer, &line);
-        // }
-        // if (config->width.bottom > 0) {
-        //   const float starting_x = rect.x + clampedRadii.bottomLeft;
-        //   const float starting_y = rect.y + rect.h - (float)config->width.bottom;
-        //   const float length = rect.w - clampedRadii.bottomLeft - clampedRadii.bottomRight;
-        //   SDL_FRect line = { starting_x, starting_y, length, config->width.bottom };
-        //   SDL_SetRenderDrawColor(rendererData->renderer, config->color.r, config->color.g, config->color.b, config->color.a);
-        //   SDL_RenderFillRect(rendererData->renderer, &line);
-        // }
-        // //corners
-        // if (config->cornerRadius.topLeft > 0) {
-        //   const float centerX = rect.x + clampedRadii.topLeft -1;
-        //   const float centerY = rect.y + clampedRadii.topLeft;
-        //   SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.topLeft,
-        //     180.0f, 270.0f, config->width.top, config->color);
-        // }
-        // if (config->cornerRadius.topRight > 0) {
-        //   const float centerX = rect.x + rect.w - clampedRadii.topRight -1;
-        //   const float centerY = rect.y + clampedRadii.topRight;
-        //   SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.topRight,
-        //     270.0f, 360.0f, config->width.top, config->color);
-        // }
-        // if (config->cornerRadius.bottomLeft > 0) {
-        //   const float centerX = rect.x + clampedRadii.bottomLeft -1;
-        //   const float centerY = rect.y + rect.h - clampedRadii.bottomLeft -1;
-        //   SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.bottomLeft,
-        //     90.0f, 180.0f, config->width.bottom, config->color);
-        // }
-        // if (config->cornerRadius.bottomRight > 0) {
-        //   const float centerX = rect.x + rect.w - clampedRadii.bottomRight -1; //TODO: why need to -1 in all calculations???
-        //   const float centerY = rect.y + rect.h - clampedRadii.bottomRight -1;
-        //   SDL_Clay_RenderArc(rendererData, (SDL_FPoint){centerX, centerY}, clampedRadii.bottomRight,
-        //     0.0f, 90.0f, config->width.bottom, config->color);
-        // }
+        f3 min = { rect.x             , rect.y              , ui_z };
+        f3 max = { rect.x + rect.width, rect.y + rect.height, ui_z };
+        float r = config->cornerRadius.topLeft;
+
+        {
+          float t;
+          t = config->width.top;
+          gl_geo_line(
+            (f3){ min.x - t*0.5f + r, min.y, ui_z },
+            (f3){ max.x + t*0.5f - r, min.y, ui_z },
+            t,
+            color
+          );
+
+          t = config->width.left;
+          gl_geo_line(
+            (f3){ min.x, max.y + t*0.5f - r, ui_z },
+            (f3){ min.x, min.y - t*0.5f + r, ui_z },
+            t,
+            color
+          );
+
+          t = config->width.bottom;
+          gl_geo_line(
+            (f3){ max.x + t*0.5f - r, max.y, ui_z },
+            (f3){ min.x - t*0.5f + r, max.y, ui_z },
+            t,
+            color
+          );
+
+          t = config->width.right;
+          gl_geo_line(
+            (f3){ max.x, min.y - t*0.5f + r, ui_z },
+            (f3){ max.x, max.y + t*0.5f - r, ui_z },
+            t,
+            color
+          );
+        }
+
+        {
+          /* probably fine just to use the top as the width of all of these */
+          float t = config->width.top;
+          float q = M_PI * 0.5f;
+          gl_geo_ring2_arc(2*q, 3*q, 16, (f3) { min.x + r, min.y + r, ui_z }, r, t, color);
+          gl_geo_ring2_arc(1*q, 2*q, 16, (f3) { min.x + r, max.y - r, ui_z }, r, t, color);
+          gl_geo_ring2_arc(3*q, 4*q, 16, (f3) { max.x - r, min.y + r, ui_z }, r, t, color);
+          gl_geo_ring2_arc(0*q, 1*q, 16, (f3) { max.x - r, max.y - r, ui_z }, r, t, color);
+        }
 
       } break;
 
@@ -1479,12 +1591,6 @@ static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
 
       case CLAY_RENDER_COMMAND_TYPE_IMAGE: {
         SDL_Log("does anyone use this?\n");
-        // SDL_Surface *image = (SDL_Surface *)rcmd->renderData.image.imageData;
-        // SDL_Texture *texture = SDL_CreateTextureFromSurface(rendererData->renderer, image);
-        // const SDL_FRect dest = { rect.x, rect.y, rect.w, rect.h };
-
-        // SDL_RenderTexture(rendererData->renderer, texture, NULL, &dest);
-        // SDL_DestroyTexture(texture);
       } break;
 
       default:
@@ -1585,7 +1691,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
         /* draw a ring where we think the mouse is in 3D space
          * (useful to compare to its 2D position) */
-        gl_geo_ring(
+        gl_geo_ring3(
           32,
           jeux.mouse_ground,
           0.2f,
@@ -1596,7 +1702,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
       /* lil ring around the player,
        * useful for debugging physics */
-      gl_geo_ring(
+      gl_geo_ring3(
         32,
         (f3) { 0.0f, 0.0f, -0.01f },
         0.5f,
@@ -1606,7 +1712,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
 #if 0
       /* draw player-sized box around (0, 0, 0) */
-      gl_geo_box_outline(
+      gl_geo_box3_outline(
         (f3) { 0.0f, 0.0f, 1.0f },
         (f3) { 0.3f, 0.3f, 1.0f },
         debug_thickness,
@@ -1788,6 +1894,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     glViewport(0, 0, jeux.gl.pp.phys_win_size_x, jeux.gl.pp.phys_win_size_y);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
+    glClear(GL_DEPTH_BUFFER_BIT);
+
     /* draw the contents of the framebuffer with postprocessing/aa applied */
     {
       glUseProgram(jeux.gl.pp.shader);
@@ -1803,6 +1911,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     /* draw text (after pp because it has its own AA) */
     {
       glUseProgram(jeux.gl.text.shader);
+
+      glEnable(GL_DEPTH_TEST);
+      glDepthFunc(GL_LEQUAL);
 
       /* update VBO contents */
       {
@@ -1827,7 +1938,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
         glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.text.buf_vtx);
         glEnableVertexAttribArray(jeux.gl.text.shader_a_pos);
-        glVertexAttribPointer(jeux.gl.text.shader_a_pos, 2, GL_FLOAT, GL_FALSE, size, (void *)offsetof(gl_text_Vtx, x));
+        glVertexAttribPointer(jeux.gl.text.shader_a_pos, 3, GL_FLOAT, GL_FALSE, size, (void *)offsetof(gl_text_Vtx, x));
 
         glEnableVertexAttribArray(jeux.gl.text.shader_a_uv);
         glVertexAttribPointer(jeux.gl.text.shader_a_uv, 2, GL_FLOAT, GL_FALSE, size, (void *)offsetof(gl_text_Vtx, u));
@@ -1850,6 +1961,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       glDrawElements(GL_TRIANGLES, 3 * (jeux.gl.text.idx_wtr - jeux.gl.text.idx), GL_UNSIGNED_SHORT, 0);
 
       glDisable(GL_BLEND);
+      glDisable(GL_DEPTH_TEST);
     }
   }
 

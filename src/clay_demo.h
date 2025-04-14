@@ -9,6 +9,7 @@ void RenderHeaderButton(Clay_String text) {
     CLAY({
         .layout = { .padding = { 16, 16, 8, 8 }},
         .backgroundColor = { 140, 140, 140, 255 },
+        .border = { .color = { 10, 0, 20, 255}, .width = { 2, 2, 2, 2 }},
         .cornerRadius = CLAY_CORNER_RADIUS(5)
     }) {
         CLAY_TEXT(text, CLAY_TEXT_CONFIG({
@@ -128,6 +129,7 @@ Clay_RenderCommandArray ClayVideoDemo_CreateLayout(ClayVideoDemo_Data *data) {
             // Header buttons go here
             CLAY({ .id = CLAY_ID("FileButton"),
                 .layout = { .padding = { 16, 16, 8, 8 }},
+                .border = { .color = { 10, 0, 20, 255}, .width = { 2, 2, 2, 2 }},
                 .backgroundColor = {140, 140, 140, 255 },
                 .cornerRadius = CLAY_CORNER_RADIUS(5)
             }) {
