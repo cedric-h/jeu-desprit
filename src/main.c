@@ -2043,7 +2043,9 @@ static struct {
     uint8_t antialiasing;
   } options;
 
-  bool mouse_down;
+  /* the element who owns the current mouse down action */
+  Clay_ElementId lmb_click_el;
+  bool lmb_click;
 } gui = { 0 };
 
 static void ui_checkbox(bool *state) {
@@ -2062,7 +2064,7 @@ static void ui_checkbox(bool *state) {
       if (Clay_Hovered()) {
         text_conf.textColor.r = 100;
         text_conf.fontSize = 28;
-        if (gui.mouse_down) *state ^= 1;
+        if (gui.lmb_click) *state ^= 1;
       }
       if (*state) CLAY_TEXT(CLAY_STRING("X"), CLAY_TEXT_CONFIG(text_conf));
       else        CLAY_TEXT(CLAY_STRING("O"), CLAY_TEXT_CONFIG(text_conf));
@@ -2070,11 +2072,14 @@ static void ui_checkbox(bool *state) {
   };
 }
 
-static void ui_slider(float *state) {
+static void ui_slider(Clay_ElementId id, float *state) {
+  Clay_ElementId handle_id = CLAY_IDI("SliderHandle", id.id);
+
   CLAY({
     .layout.sizing.width  = CLAY_SIZING_GROW(0),
     .layout.sizing.height = CLAY_SIZING_GROW(0),
     .layout.layoutDirection = CLAY_TOP_TO_BOTTOM,
+    .id = id,
   }) {
     CLAY({ .layout.sizing.height = CLAY_SIZING_GROW(0) });
     CLAY({
@@ -2084,17 +2089,31 @@ static void ui_slider(float *state) {
     });
     CLAY({ .layout.sizing.height = CLAY_SIZING_GROW(0) });
 
+    Clay_BoundingBox bbox = Clay_GetElementData(id).boundingBox;
+
     CLAY({
       .floating.attachTo = CLAY_ATTACH_TO_PARENT,
       .floating.attachPoints.element = CLAY_ATTACH_POINT_CENTER_CENTER,
-      .floating.attachPoints.parent = CLAY_ATTACH_POINT_CENTER_CENTER,
-      .floating.offset = { 30, -6 },
+      .floating.attachPoints.parent = CLAY_ATTACH_POINT_LEFT_CENTER,
+      .floating.offset = { *state * bbox.width, -6 },
+      .id = handle_id,
     }) {
       Clay_TextElementConfig text_conf = { .fontSize = 20, .textColor = ink };
 
-      if (Clay_Hovered()) {
+      bool held = gui.lmb_click_el.id == handle_id.id;
+
+      if (Clay_Hovered() || held) {
         text_conf.textColor.r = 100;
         text_conf.fontSize = 25;
+
+        if (gui.lmb_click) {
+          gui.lmb_click_el = handle_id;
+        }
+      }
+
+      if (held) {
+        float progress_px = jeux.mouse_screen_x - bbox.x;
+        *state = progress_px / bbox.width;
       }
 
       CLAY_TEXT(CLAY_STRING("V"), CLAY_TEXT_CONFIG(text_conf));
@@ -2102,23 +2121,52 @@ static void ui_slider(float *state) {
   }
 }
 
-static void ui_picker(uint8_t *state, uint8_t largest_option) {
+static bool ui_arrow_button(void) {
+
+  bool click = false;
+
+  CLAY({
+    .layout.sizing = { CLAY_SIZING_FIXED(18), CLAY_SIZING_GROW(0) },
+  }) {
+
+    Clay_TextElementConfig text_conf = { .fontSize = 18, .textColor = ink };
+
+    CLAY({
+      .floating.attachTo = CLAY_ATTACH_TO_PARENT,
+      .floating.attachPoints.element = CLAY_ATTACH_POINT_CENTER_CENTER,
+      .floating.attachPoints.parent = CLAY_ATTACH_POINT_CENTER_CENTER,
+    }) {
+      if (Clay_Hovered()) {
+        text_conf.textColor.r = 100;
+        text_conf.fontSize = 28;
+        if (gui.lmb_click) click = true;
+      }
+      CLAY_TEXT(CLAY_STRING("X"), CLAY_TEXT_CONFIG(text_conf));
+    }
+  };
+
+  return click;
+}
+
+static void ui_picker(uint8_t *state, uint8_t option_count, Clay_String *labels) {
   Clay_TextElementConfig text_conf = { .fontSize = text_body, .textColor = ink };
 
   CLAY({
     .layout.sizing.width  = CLAY_SIZING_GROW(0),
     .layout.sizing.height = CLAY_SIZING_GROW(0),
   }) {
-    CLAY_TEXT(CLAY_STRING("X"), CLAY_TEXT_CONFIG(text_conf));
+    if (ui_arrow_button()) *state = (*state == 0 ? option_count : *state) - 1;
     CLAY({ .layout.sizing.width  = CLAY_SIZING_GROW(0) });
-    CLAY_TEXT(CLAY_STRING("FXAA"), CLAY_TEXT_CONFIG(text_conf));
+    CLAY_TEXT(labels[*state], CLAY_TEXT_CONFIG(text_conf));
     CLAY({ .layout.sizing.width  = CLAY_SIZING_GROW(0) });
-    CLAY_TEXT(CLAY_STRING("X"), CLAY_TEXT_CONFIG(text_conf));
+    if (ui_arrow_button()) *state = (*state + 1) % option_count;
   }
 }
 
 static void ui_main(void) {
-  gui.mouse_down = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_PRESSED_THIS_FRAME;
+  bool mouse_up = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_RELEASED_THIS_FRAME;
+  if (mouse_up) gui.lmb_click_el = (Clay_ElementId) { 0 };
+  gui.lmb_click = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_PRESSED_THIS_FRAME;
   gui.options.open = true;
 
   /* HUD */
@@ -2139,7 +2187,7 @@ static void ui_main(void) {
         .layout.sizing = { CLAY_SIZING_FIXED(32), CLAY_SIZING_FIXED(32) },
         .cornerRadius = CLAY_CORNER_RADIUS(16)
       }) {
-        if (Clay_Hovered() && gui.mouse_down) {
+        if (Clay_Hovered() && gui.lmb_click) {
           gui.options.open ^= 1;
           SDL_Log("hover! %d\n", gui.options.open);
         }
@@ -2211,12 +2259,19 @@ static void ui_main(void) {
 
         CLAY(pair) {
           CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("FOV"), CLAY_TEXT_CONFIG(label)); }
-          CLAY(pair_inner) { ui_slider(&gui.options.fov); }
+          CLAY(pair_inner) { ui_slider(CLAY_ID("FOV_SLIDER"), &gui.options.fov); }
         }
 
         CLAY(pair) {
           CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("ANTIALIASING"), CLAY_TEXT_CONFIG(label)); }; 
-          CLAY(pair_inner) { ui_picker(&gui.options.antialiasing, gl_AntiAliasingApproach_COUNT); }; 
+          Clay_String labels[] = {
+            [gl_AntiAliasingApproach_None  ] = CLAY_STRING("NONE"),
+            [gl_AntiAliasingApproach_Linear] = CLAY_STRING("Linear"),
+            [gl_AntiAliasingApproach_FXAA  ] = CLAY_STRING("FXAA"),
+            [gl_AntiAliasingApproach_2XSSAA] = CLAY_STRING("2x SSAA"),
+            [gl_AntiAliasingApproach_4XSSAA] = CLAY_STRING("4x SSAA"),
+          };
+          CLAY(pair_inner) { ui_picker(&gui.options.antialiasing, gl_AntiAliasingApproach_COUNT, labels); }; 
         }
       }
     }
