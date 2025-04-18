@@ -263,7 +263,7 @@ typedef enum {
   gl_Model_COUNT,
 } gl_Model;
 
-#include "../models/include/head.h"
+#include "../models/include/Head.h"
 #include "../models/include/HornedHelmet.h"
 #include "../models/include/IntroGravestoneTerrain.h"
 #include "walk.h"
@@ -1692,6 +1692,16 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
           } options;
         } gui = { 0 };
 
+        gui.options.open = true;
+
+        Clay_Color paper       = { 158, 131, 107, 255 };
+        Clay_Color paper_hover = { 128, 101,  77, 255 };
+        Clay_Color wood        = {  27,  15,   7, 255 };
+        Clay_Color ink         = {   0,   0,   0, 255 };
+
+        uint16_t text_body = 16;
+        uint16_t text_title = 24;
+
         /* HUD */
         {
           CLAY({
@@ -1705,9 +1715,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
           }) {
             CLAY({
               .id = CLAY_ID("OptionsToggle"),
-              .border = { .color = { 58, 31, 7, 155 }, .width = { 2, 2, 2, 2 }},
-              .backgroundColor = Clay_Hovered() ? (Clay_Color) { 255, 255, 255, 255 }
-                                                : (Clay_Color) { 205, 205, 205, 255 },
+              .border = { .color = wood, .width = { 3, 3, 3, 3 }},
+              .backgroundColor = Clay_Hovered() ? paper_hover : paper,
               .layout.sizing = { CLAY_SIZING_FIXED(30), CLAY_SIZING_FIXED(30) },
               .cornerRadius = CLAY_CORNER_RADIUS(15)
             }) {
@@ -1726,13 +1735,51 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         if (gui.options.open) {
           CLAY({
             .id = CLAY_ID("OptionsWindow"),
-            .layout.padding = { 8, 8, 8, 8 },
-            .backgroundColor = (Clay_Color) { 255, 255, 255, 255 },
+            .layout.padding = { 24, 24, 8, 8 },
+            .layout.layoutDirection = CLAY_TOP_TO_BOTTOM,
+            .layout.sizing = { CLAY_SIZING_FIXED(300), CLAY_SIZING_FIXED(170) },
+            .floating.attachTo = CLAY_ATTACH_TO_ROOT,
+            .floating.offset = { 100, 100 },
+            .border = { .color = wood, .width = { 3, 3, 3, 3 }},
+            .backgroundColor = paper,
           }) {
-            CLAY_TEXT(CLAY_STRING("Options"), CLAY_TEXT_CONFIG({
-                .fontSize = 16,
-                .textColor = { 0, 0, 0, 255 }
-            }));
+
+            CLAY({
+              .id = CLAY_ID("WindowTitle"),
+              .layout.padding.top = 10,
+              .layout.padding.bottom = 25,
+              .layout.sizing = { .width = CLAY_SIZING_GROW(0) }
+            }) {
+
+              CLAY({ .id = CLAY_ID("PaddingLeft"), .layout.sizing.width = CLAY_SIZING_GROW(0) });
+              CLAY_TEXT(CLAY_STRING("OPTIONS"), CLAY_TEXT_CONFIG({ .fontSize = text_title, .textColor = ink }));
+              CLAY({ .id = CLAY_ID("PaddingRight"), .layout.sizing.width = CLAY_SIZING_GROW(0) });
+            }
+
+            CLAY({
+                .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 20 },
+                .layout.sizing.width = CLAY_SIZING_GROW(0)
+            }) {
+              CLAY({
+                .id = CLAY_ID("PerspectiveOption"),
+                .layout.sizing.width = CLAY_SIZING_GROW(0)
+              }) {
+
+                CLAY({ .layout.sizing = { .width = CLAY_SIZING_GROW(0) } }) {
+                  CLAY_TEXT(CLAY_STRING("PERSPECTIVE"), CLAY_TEXT_CONFIG({ .fontSize = text_body, .textColor = ink }));
+                }
+
+                CLAY({ .layout.sizing = { .width = CLAY_SIZING_GROW(0) } }) {
+                  CLAY({ .id = CLAY_ID("_PaddingLeft"), .layout.sizing.width = CLAY_SIZING_GROW(0) });
+                  CLAY_TEXT(CLAY_STRING("X"), CLAY_TEXT_CONFIG({ .fontSize = text_body, .textColor = ink }));
+                  CLAY({ .id = CLAY_ID("_PaddingRight"), .layout.sizing.width = CLAY_SIZING_GROW(0) });
+                }
+
+              }
+
+              CLAY_TEXT(CLAY_STRING("FOV"), CLAY_TEXT_CONFIG({ .fontSize = text_body, .textColor = ink }));
+              CLAY_TEXT(CLAY_STRING("ANTIALIASING"), CLAY_TEXT_CONFIG({ .fontSize = text_body, .textColor = ink }));
+            }
           }
         }
 
@@ -2051,7 +2098,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       glEnable(GL_DEPTH_TEST);
 
       float gamma = 2.0;
-      glUniform1f(jeux.gl.text.shader_u_gamma, gamma * 1.4142);
+      glUniform1f(jeux.gl.text.shader_u_gamma, gamma * 1.4142 / SDL_GetWindowPixelDensity(jeux.sdl.window));
       glDrawElements(GL_TRIANGLES, 3 * (jeux.gl.text.idx_wtr - jeux.gl.text.idx), GL_UNSIGNED_SHORT, 0);
 
       glDisable(GL_BLEND);
