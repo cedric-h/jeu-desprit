@@ -263,7 +263,7 @@ typedef enum {
   gl_Model_COUNT,
 } gl_Model;
 
-#include "../models/include/Head.h"
+#include "../models/include/head.h"
 #include "../models/include/HornedHelmet.h"
 #include "../models/include/IntroGravestoneTerrain.h"
 #include "walk.h"
@@ -1614,6 +1614,7 @@ static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
   }
 }
 
+static void ui_main(void);
 SDL_AppResult SDL_AppIterate(void *appstate) {
   /* timekeeping */
   {
@@ -1686,102 +1687,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
         Clay_BeginLayout();
 
-        static struct {
-          struct {
-            bool open;
-          } options;
-        } gui = { 0 };
+        ui_main();
 
-        gui.options.open = true;
-
-        Clay_Color paper       = { 158, 131, 107, 255 };
-        Clay_Color paper_hover = { 128, 101,  77, 255 };
-        Clay_Color wood        = {  27,  15,   7, 255 };
-        Clay_Color ink         = {   0,   0,   0, 255 };
-
-        uint16_t text_body = 16;
-        uint16_t text_title = 24;
-
-        /* HUD */
-        {
-          CLAY({
-            .id = CLAY_ID("HeaderBar"),
-            .layout = {
-              .sizing = { .width = CLAY_SIZING_GROW(0) },
-              .padding = { 2, 2, 2, 2 },
-              .childGap = 16,
-              .childAlignment = { .y = CLAY_ALIGN_Y_CENTER }
-            },
-          }) {
-            CLAY({
-              .id = CLAY_ID("OptionsToggle"),
-              .border = { .color = wood, .width = { 3, 3, 3, 3 }},
-              .backgroundColor = Clay_Hovered() ? paper_hover : paper,
-              .layout.sizing = { CLAY_SIZING_FIXED(30), CLAY_SIZING_FIXED(30) },
-              .cornerRadius = CLAY_CORNER_RADIUS(15)
-            }) {
-              bool mouse_down = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_PRESSED_THIS_FRAME;
-              if (Clay_Hovered() && mouse_down) {
-                gui.options.open ^= 1;
-                SDL_Log("hover! %d\n", gui.options.open);
-              }
-              /* icon here */
-
-            }
-          }
-        }
-
-        /* options window */
-        if (gui.options.open) {
-          CLAY({
-            .id = CLAY_ID("OptionsWindow"),
-            .layout.padding = { 24, 24, 8, 8 },
-            .layout.layoutDirection = CLAY_TOP_TO_BOTTOM,
-            .layout.sizing = { CLAY_SIZING_FIXED(300), CLAY_SIZING_FIXED(170) },
-            .floating.attachTo = CLAY_ATTACH_TO_ROOT,
-            .floating.offset = { 100, 100 },
-            .border = { .color = wood, .width = { 3, 3, 3, 3 }},
-            .backgroundColor = paper,
-          }) {
-
-            CLAY({
-              .id = CLAY_ID("WindowTitle"),
-              .layout.padding.top = 10,
-              .layout.padding.bottom = 25,
-              .layout.sizing = { .width = CLAY_SIZING_GROW(0) }
-            }) {
-
-              CLAY({ .id = CLAY_ID("PaddingLeft"), .layout.sizing.width = CLAY_SIZING_GROW(0) });
-              CLAY_TEXT(CLAY_STRING("OPTIONS"), CLAY_TEXT_CONFIG({ .fontSize = text_title, .textColor = ink }));
-              CLAY({ .id = CLAY_ID("PaddingRight"), .layout.sizing.width = CLAY_SIZING_GROW(0) });
-            }
-
-            CLAY({
-                .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 20 },
-                .layout.sizing.width = CLAY_SIZING_GROW(0)
-            }) {
-              CLAY({
-                .id = CLAY_ID("PerspectiveOption"),
-                .layout.sizing.width = CLAY_SIZING_GROW(0)
-              }) {
-
-                CLAY({ .layout.sizing = { .width = CLAY_SIZING_GROW(0) } }) {
-                  CLAY_TEXT(CLAY_STRING("PERSPECTIVE"), CLAY_TEXT_CONFIG({ .fontSize = text_body, .textColor = ink }));
-                }
-
-                CLAY({ .layout.sizing = { .width = CLAY_SIZING_GROW(0) } }) {
-                  CLAY({ .id = CLAY_ID("_PaddingLeft"), .layout.sizing.width = CLAY_SIZING_GROW(0) });
-                  CLAY_TEXT(CLAY_STRING("X"), CLAY_TEXT_CONFIG({ .fontSize = text_body, .textColor = ink }));
-                  CLAY({ .id = CLAY_ID("_PaddingRight"), .layout.sizing.width = CLAY_SIZING_GROW(0) });
-                }
-
-              }
-
-              CLAY_TEXT(CLAY_STRING("FOV"), CLAY_TEXT_CONFIG({ .fontSize = text_body, .textColor = ink }));
-              CLAY_TEXT(CLAY_STRING("ANTIALIASING"), CLAY_TEXT_CONFIG({ .fontSize = text_body, .textColor = ink }));
-            }
-          }
-        }
 
         cmds = Clay_EndLayout();
       }
@@ -2108,4 +2015,210 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
   SDL_GL_SwapWindow(jeux.sdl.window);
   return SDL_APP_CONTINUE;
+}
+
+/* UI */
+
+Clay_Color paper       = { 150, 131, 107, 255 };
+Clay_Color paper_hover = { 128, 101,  77, 255 };
+Clay_Color wood        = {  27,  15,   7, 255 };
+Clay_Color ink         = {   0,   0,   0, 255 };
+
+uint16_t text_body = 16;
+uint16_t text_title = 24;
+
+typedef enum {
+  gl_AntiAliasingApproach_None,
+  gl_AntiAliasingApproach_Linear,
+  gl_AntiAliasingApproach_FXAA,
+  gl_AntiAliasingApproach_2XSSAA,
+  gl_AntiAliasingApproach_4XSSAA,
+  gl_AntiAliasingApproach_COUNT
+} gl_AntiAliasingApproach;
+static struct {
+  struct {
+    bool open;
+    bool perspective;
+    float fov;
+    uint8_t antialiasing;
+  } options;
+
+  bool mouse_down;
+} gui = { 0 };
+
+static void ui_checkbox(bool *state) {
+
+  CLAY({
+    .layout.sizing = { CLAY_SIZING_FIXED(14), CLAY_SIZING_FIXED(14) },
+  }) {
+
+    Clay_TextElementConfig text_conf = { .fontSize = 22, .textColor = ink };
+
+    CLAY({
+      .floating.attachTo = CLAY_ATTACH_TO_PARENT,
+      .floating.attachPoints.element = CLAY_ATTACH_POINT_CENTER_CENTER,
+      .floating.attachPoints.parent = CLAY_ATTACH_POINT_CENTER_CENTER,
+    }) {
+      if (Clay_Hovered()) {
+        text_conf.textColor.r = 100;
+        text_conf.fontSize = 28;
+        if (gui.mouse_down) *state ^= 1;
+      }
+      if (*state) CLAY_TEXT(CLAY_STRING("X"), CLAY_TEXT_CONFIG(text_conf));
+      else        CLAY_TEXT(CLAY_STRING("O"), CLAY_TEXT_CONFIG(text_conf));
+    }
+  };
+}
+
+static void ui_slider(float *state) {
+  CLAY({
+    .layout.sizing.width  = CLAY_SIZING_GROW(0),
+    .layout.sizing.height = CLAY_SIZING_GROW(0),
+    .layout.layoutDirection = CLAY_TOP_TO_BOTTOM,
+  }) {
+    CLAY({ .layout.sizing.height = CLAY_SIZING_GROW(0) });
+    CLAY({
+      .layout.sizing.width  = CLAY_SIZING_GROW(0),
+      .layout.sizing.height  = CLAY_SIZING_FIXED(2),
+      .backgroundColor = wood
+    });
+    CLAY({ .layout.sizing.height = CLAY_SIZING_GROW(0) });
+
+    CLAY({
+      .floating.attachTo = CLAY_ATTACH_TO_PARENT,
+      .floating.attachPoints.element = CLAY_ATTACH_POINT_CENTER_CENTER,
+      .floating.attachPoints.parent = CLAY_ATTACH_POINT_CENTER_CENTER,
+      .floating.offset = { 30, -6 },
+    }) {
+      Clay_TextElementConfig text_conf = { .fontSize = 20, .textColor = ink };
+
+      if (Clay_Hovered()) {
+        text_conf.textColor.r = 100;
+        text_conf.fontSize = 25;
+      }
+
+      CLAY_TEXT(CLAY_STRING("V"), CLAY_TEXT_CONFIG(text_conf));
+    }
+  }
+}
+
+static void ui_picker(uint8_t *state, uint8_t largest_option) {
+  Clay_TextElementConfig text_conf = { .fontSize = text_body, .textColor = ink };
+
+  CLAY({
+    .layout.sizing.width  = CLAY_SIZING_GROW(0),
+    .layout.sizing.height = CLAY_SIZING_GROW(0),
+  }) {
+    CLAY_TEXT(CLAY_STRING("X"), CLAY_TEXT_CONFIG(text_conf));
+    CLAY({ .layout.sizing.width  = CLAY_SIZING_GROW(0) });
+    CLAY_TEXT(CLAY_STRING("FXAA"), CLAY_TEXT_CONFIG(text_conf));
+    CLAY({ .layout.sizing.width  = CLAY_SIZING_GROW(0) });
+    CLAY_TEXT(CLAY_STRING("X"), CLAY_TEXT_CONFIG(text_conf));
+  }
+}
+
+static void ui_main(void) {
+  gui.mouse_down = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_PRESSED_THIS_FRAME;
+  gui.options.open = true;
+
+  /* HUD */
+  {
+    CLAY({
+      .id = CLAY_ID("HeaderBar"),
+      .layout = {
+        .sizing = { .width = CLAY_SIZING_GROW(0) },
+        .padding = CLAY_PADDING_ALL(4),
+        .childGap = 16,
+        .childAlignment = { .y = CLAY_ALIGN_Y_CENTER }
+      },
+    }) {
+      CLAY({
+        .id = CLAY_ID("OptionsToggle"),
+        .border = { .color = wood, .width = { 2, 2, 2, 2 }},
+        .backgroundColor = Clay_Hovered() ? paper_hover : paper,
+        .layout.sizing = { CLAY_SIZING_FIXED(32), CLAY_SIZING_FIXED(32) },
+        .cornerRadius = CLAY_CORNER_RADIUS(16)
+      }) {
+        if (Clay_Hovered() && gui.mouse_down) {
+          gui.options.open ^= 1;
+          SDL_Log("hover! %d\n", gui.options.open);
+        }
+        /* icon here */
+
+      }
+    }
+  }
+
+  /* options window */
+  if (gui.options.open) {
+    CLAY({
+      .id = CLAY_ID("OptionsWindow"),
+      .layout.padding = { 24, 24, 8, 8 },
+      .layout.layoutDirection = CLAY_TOP_TO_BOTTOM,
+      .layout.sizing = { CLAY_SIZING_FIXED(300), CLAY_SIZING_FIXED(170) },
+      .floating.attachTo = CLAY_ATTACH_TO_ROOT,
+      .floating.offset = { 100, 100 },
+      .border = { .color = wood, .width = { 3, 3, 3, 3 }},
+      .backgroundColor = paper,
+    }) {
+
+      CLAY({
+        .id = CLAY_ID("WindowTitle"),
+        .layout.padding.top = 10,
+        .layout.padding.bottom = 15,
+        .layout.sizing = { .width = CLAY_SIZING_GROW(0) }
+      }) {
+
+        CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
+        CLAY_TEXT(CLAY_STRING("OPTIONS"), CLAY_TEXT_CONFIG({ .fontSize = text_title, .textColor = ink }));
+        CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
+      }
+
+      CLAY({
+          .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM },
+          .layout.sizing.width = CLAY_SIZING_GROW(0)
+      }) {
+
+        Clay_ElementDeclaration pair = {
+          .layout.sizing.width = CLAY_SIZING_GROW(0),
+          .layout.padding.top = 10,
+          .layout.padding.bottom = 10,
+        };
+
+        Clay_ElementDeclaration pair_inner = {
+          .layout.sizing.width = CLAY_SIZING_GROW(0),
+          .layout.sizing.height = CLAY_SIZING_GROW(0),
+        };
+
+        Clay_TextElementConfig label = {
+          .fontSize = text_body,
+          .textColor = ink
+        };
+
+        CLAY(pair) {
+
+          CLAY(pair_inner) {
+            CLAY_TEXT(CLAY_STRING("PERSPECTIVE"), CLAY_TEXT_CONFIG(label));
+          }
+
+          CLAY({ .layout.sizing = { .width = CLAY_SIZING_GROW(0) } }) {
+            CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
+            ui_checkbox(&gui.options.perspective);
+            CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
+          }
+
+        }
+
+        CLAY(pair) {
+          CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("FOV"), CLAY_TEXT_CONFIG(label)); }
+          CLAY(pair_inner) { ui_slider(&gui.options.fov); }
+        }
+
+        CLAY(pair) {
+          CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("ANTIALIASING"), CLAY_TEXT_CONFIG(label)); }; 
+          CLAY(pair_inner) { ui_picker(&gui.options.antialiasing, gl_AntiAliasingApproach_COUNT); }; 
+        }
+      }
+    }
+  }
 }
