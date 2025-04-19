@@ -10,6 +10,11 @@
 #include <SDL3/SDL_main.h>
 #include "gl_include/gles3.h"
 
+typedef struct { float x, y; } f2;
+typedef struct { float x, y, z; } f3;
+typedef union { float arr[4]; struct { float x, y, z, w; } p; f3 xyz; } f4;
+typedef union { float arr[4][4]; f4 rows[4]; float floats[16]; } f4x4;
+
 #define CLAY_IMPLEMENTATION
 #include "clay.h"
 #include "font.h"
@@ -18,10 +23,6 @@
 
 #define BREAKPOINT() __builtin_debugtrap()
 #define jx_COUNT(arr) (sizeof(arr) / sizeof((arr)[0]))
-typedef struct { float x, y; } f2;
-typedef struct { float x, y, z; } f3;
-typedef union { float arr[4]; struct { float x, y, z, w; } p; f3 xyz; } f4;
-typedef union { float arr[4][4]; f4 rows[4]; float floats[16]; } f4x4;
 
 typedef struct { f2 min, max; } Box2;
 #define BOX2_UNCONSTRAINED (Box2) { { -INFINITY, -INFINITY }, {  INFINITY,  INFINITY } }
@@ -211,6 +212,15 @@ static f4x4 f4x4_scale(float scale) {
   return res;
 }
 
+static f4x4 f4x4_scale3(f3 scale) {
+  f4x4 res = {0};
+  res.arr[0][0] = scale.x;
+  res.arr[1][1] = scale.y;
+  res.arr[2][2] = scale.z;
+  res.arr[3][3] = 1.0f;
+  return res;
+}
+
 /* 2D rotation around the Z axis */
 static f4x4 f4x4_turn(float radians) {
   f4x4 res = {0};
@@ -260,12 +270,34 @@ typedef enum {
   gl_Model_Head,
   gl_Model_HornedHelmet,
   gl_Model_IntroGravestoneTerrain,
+
+  gl_Model_UiOptions,
+  gl_Model_UiArrowButton,
+  gl_Model_UiCheck,
+  gl_Model_UiCheckBox,
+  gl_Model_UiEcksButton,
+  gl_Model_UiSliderBody,
+  gl_Model_UiSliderHandle,
+  gl_Model_UiWindowCorner,
+  gl_Model_UiWindowTop,
+  gl_Model_UiWindowBorder,
+
   gl_Model_COUNT,
 } gl_Model;
 
-#include "../models/include/head.h"
+#include "../models/include/Head.h"
 #include "../models/include/HornedHelmet.h"
 #include "../models/include/IntroGravestoneTerrain.h"
+#include "../svg/include/UiOptions.svg.h"
+#include "../svg/include/UiArrowButton.svg.h"
+#include "../svg/include/UiCheck.svg.h"
+#include "../svg/include/UiCheckBox.svg.h"
+#include "../svg/include/UiEcksButton.svg.h"
+#include "../svg/include/UiSliderBody.svg.h"
+#include "../svg/include/UiSliderHandle.svg.h"
+#include "../svg/include/UiWindowCorner.svg.h"
+#include "../svg/include/UiWindowTop.svg.h"
+#include "../svg/include/UiWindowBorder.svg.h"
 #include "walk.h"
 
 struct {
@@ -286,12 +318,26 @@ struct {
       .vtx = model_vtx_IntroGravestoneTerrain, .vtx_count = jx_COUNT(model_vtx_IntroGravestoneTerrain),
       .tri = model_tri_IntroGravestoneTerrain, .tri_count = jx_COUNT(model_tri_IntroGravestoneTerrain),
   },
+
+  /* TODO: In retrospect, the asset cookers really should output these sized fat pointer structs. You live and you learn. */
+  [gl_Model_UiOptions     ] = { .vtx = model_vtx_UiOptions     , .vtx_count = jx_COUNT(model_vtx_UiOptions     ), .tri = model_tri_UiOptions     , .tri_count = jx_COUNT(model_tri_UiOptions     ) },
+  [gl_Model_UiArrowButton ] = { .vtx = model_vtx_UiArrowButton , .vtx_count = jx_COUNT(model_vtx_UiArrowButton ), .tri = model_tri_UiArrowButton , .tri_count = jx_COUNT(model_tri_UiArrowButton ) },
+  [gl_Model_UiCheck       ] = { .vtx = model_vtx_UiCheck       , .vtx_count = jx_COUNT(model_vtx_UiCheck       ), .tri = model_tri_UiCheck       , .tri_count = jx_COUNT(model_tri_UiCheck       ) },
+  [gl_Model_UiCheckBox    ] = { .vtx = model_vtx_UiCheckBox    , .vtx_count = jx_COUNT(model_vtx_UiCheckBox    ), .tri = model_tri_UiCheckBox    , .tri_count = jx_COUNT(model_tri_UiCheckBox    ) },
+  [gl_Model_UiEcksButton  ] = { .vtx = model_vtx_UiEcksButton  , .vtx_count = jx_COUNT(model_vtx_UiEcksButton  ), .tri = model_tri_UiEcksButton  , .tri_count = jx_COUNT(model_tri_UiEcksButton  ) },
+  [gl_Model_UiSliderBody  ] = { .vtx = model_vtx_UiSliderBody  , .vtx_count = jx_COUNT(model_vtx_UiSliderBody  ), .tri = model_tri_UiSliderBody  , .tri_count = jx_COUNT(model_tri_UiSliderBody  ) },
+  [gl_Model_UiSliderHandle] = { .vtx = model_vtx_UiSliderHandle, .vtx_count = jx_COUNT(model_vtx_UiSliderHandle), .tri = model_tri_UiSliderHandle, .tri_count = jx_COUNT(model_tri_UiSliderHandle) },
+  [gl_Model_UiWindowCorner] = { .vtx = model_vtx_UiWindowCorner, .vtx_count = jx_COUNT(model_vtx_UiWindowCorner), .tri = model_tri_UiWindowCorner, .tri_count = jx_COUNT(model_tri_UiWindowCorner) },
+  [gl_Model_UiWindowTop   ] = { .vtx = model_vtx_UiWindowTop   , .vtx_count = jx_COUNT(model_vtx_UiWindowTop   ), .tri = model_tri_UiWindowTop   , .tri_count = jx_COUNT(model_tri_UiWindowTop   ) },
+  [gl_Model_UiWindowBorder] = { .vtx = model_vtx_UiWindowBorder, .vtx_count = jx_COUNT(model_vtx_UiWindowBorder), .tri = model_tri_UiWindowBorder, .tri_count = jx_COUNT(model_tri_UiWindowBorder) },
 };
 
 typedef struct {
   gl_Model model;
   /* just a model matrix, (view and projection get applied for you) */
   f4x4 matrix;
+  /* doesn't premultiply in camera matrix for you */
+  bool two_dee;
 } gl_ModelDraw;
 
 static struct {
@@ -601,7 +647,7 @@ static SDL_AppResult gl_init(void) {
           /* debug normals */
           // "  gl_FragColor = vec4(mix(vec3(1), v_normal, 0.5), 1.0);\n"
 
-          // use normal color if no normals at all */
+          // use unchanged color if no normals at all */
           "  if (abs(dot(v_normal, vec3(1))) < 0.00001) { gl_FragColor = v_color; return; }\n"
 
           "  vec3 light_dir = normalize(vec3(4.0, 1.5, 5.9));\n"
@@ -1451,6 +1497,9 @@ static void gl_geo_box3_outline(f3 center, f3 scale, float thickness, Color colo
  *      as things in the 3D scene, so we can easily draw the character in your inventory.
  *
  *  [x] UI is at z=0.99, draw over that to draw over the UI.
+
+ *  [x] clay.h's "imageData" has been changed from "void *" to a "size_t",
+ *      which is interpreted as a gl_Model.
  *
  *  [x] Even though our text is arbitrarily resizable, Clay's fontSize is a uint16_t, so
  *      the text ends up getting truncated. This is trivial to tweak in clay.h, but the
@@ -1605,7 +1654,17 @@ static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
       } break;
 
       case CLAY_RENDER_COMMAND_TYPE_IMAGE: {
-        SDL_Log("does anyone use this?\n");
+        Clay_BoundingBox bbox = rcmd->boundingBox;
+
+        f4x4 mvp = f4x4_move((f3) { bbox.x, bbox.y, ui_z });
+        mvp = f4x4_mul_f4x4(mvp, f4x4_scale3((f3) { bbox.width, bbox.height, 1.0f }));
+        mvp = f4x4_mul_f4x4(mvp, rcmd->renderData.image.transform);
+
+        *jeux.gl.geo.model_draws_wtr++ = (gl_ModelDraw) {
+          .model = rcmd->renderData.image.imageData,
+          .matrix = mvp,
+          .two_dee = true,
+        };
       } break;
 
       default:
@@ -1906,9 +1965,15 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
           GEO_VTX_BIND_LAYOUT;
 
-          f4x4 mvp = jeux.camera;
-          mvp = f4x4_mul_f4x4(mvp, draw->matrix);
-          glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, mvp.floats);
+          if (draw->two_dee) {
+            f4x4 mvp = jeux.screen;
+            mvp = f4x4_mul_f4x4(mvp, draw->matrix);
+            glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, mvp.floats);
+          } else {
+            f4x4 mvp = jeux.camera;
+            mvp = f4x4_mul_f4x4(mvp, draw->matrix);
+            glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, mvp.floats);
+          }
 
           glDrawElements(GL_TRIANGLES, 3 * tri_count, GL_UNSIGNED_SHORT, 0);
         }
@@ -2046,7 +2111,32 @@ static struct {
   /* the element who owns the current mouse down action */
   Clay_ElementId lmb_click_el;
   bool lmb_click;
-} gui = { 0 };
+} gui = {
+  .options.open = true
+};
+
+
+static void ui_icon(gl_Model model, size_t size) {
+  CLAY({
+    .layout.sizing = { CLAY_SIZING_FIXED(size), CLAY_SIZING_FIXED(size) },
+    .image = {
+      .sourceDimensions = { size, size },
+      .imageData = model,
+      .transform = f4x4_scale(1)
+    }
+  });
+}
+
+static void ui_icon_f4x4(gl_Model model, size_t size, f4x4 mat) {
+  CLAY({
+    .layout.sizing = { CLAY_SIZING_FIXED(size), CLAY_SIZING_FIXED(size) },
+    .image = {
+      .sourceDimensions = { size, size },
+      .imageData = model,
+      .transform = mat
+    }
+  });
+}
 
 static void ui_checkbox(bool *state) {
 
@@ -2054,20 +2144,25 @@ static void ui_checkbox(bool *state) {
     .layout.sizing = { CLAY_SIZING_FIXED(14), CLAY_SIZING_FIXED(14) },
   }) {
 
-    Clay_TextElementConfig text_conf = { .fontSize = 22, .textColor = ink };
-
-    CLAY({
+    Clay_ElementDeclaration floating = {
       .floating.attachTo = CLAY_ATTACH_TO_PARENT,
       .floating.attachPoints.element = CLAY_ATTACH_POINT_CENTER_CENTER,
       .floating.attachPoints.parent = CLAY_ATTACH_POINT_CENTER_CENTER,
-    }) {
+      .floating.pointerCaptureMode = CLAY_POINTER_CAPTURE_MODE_PASSTHROUGH
+    };
+
+    CLAY(floating) {
+      size_t icon_size = 18;
       if (Clay_Hovered()) {
-        text_conf.textColor.r = 100;
-        text_conf.fontSize = 28;
+        icon_size = 20;
         if (gui.lmb_click) *state ^= 1;
       }
-      if (*state) CLAY_TEXT(CLAY_STRING("X"), CLAY_TEXT_CONFIG(text_conf));
-      else        CLAY_TEXT(CLAY_STRING("O"), CLAY_TEXT_CONFIG(text_conf));
+
+      ui_icon(gl_Model_UiCheckBox, icon_size);
+
+      floating.floating.offset.x =  4;
+      floating.floating.offset.y = -3;
+      if (*state) CLAY(floating) { ui_icon(gl_Model_UiCheck, icon_size); }
     }
   };
 }
@@ -2085,7 +2180,6 @@ static void ui_slider(Clay_ElementId id, float *state) {
     CLAY({
       .layout.sizing.width  = CLAY_SIZING_GROW(0),
       .layout.sizing.height  = CLAY_SIZING_FIXED(2),
-      .backgroundColor = wood
     });
     CLAY({ .layout.sizing.height = CLAY_SIZING_GROW(0) });
 
@@ -2094,17 +2188,25 @@ static void ui_slider(Clay_ElementId id, float *state) {
     CLAY({
       .floating.attachTo = CLAY_ATTACH_TO_PARENT,
       .floating.attachPoints.element = CLAY_ATTACH_POINT_CENTER_CENTER,
+      .floating.attachPoints.parent = CLAY_ATTACH_POINT_CENTER_CENTER,
+      .floating.pointerCaptureMode = CLAY_POINTER_CAPTURE_MODE_PASSTHROUGH
+    }) {
+      ui_icon(gl_Model_UiSliderBody, bbox.width);
+    }
+
+    CLAY({
+      .floating.attachTo = CLAY_ATTACH_TO_PARENT,
+      .floating.attachPoints.element = CLAY_ATTACH_POINT_CENTER_CENTER,
       .floating.attachPoints.parent = CLAY_ATTACH_POINT_LEFT_CENTER,
-      .floating.offset = { *state * bbox.width, -6 },
+      .floating.offset = { *state * bbox.width, 0 },
       .id = handle_id,
     }) {
-      Clay_TextElementConfig text_conf = { .fontSize = 20, .textColor = ink };
+      size_t icon_size = 15;
 
       bool held = gui.lmb_click_el.id == handle_id.id;
 
       if (Clay_Hovered() || held) {
-        text_conf.textColor.r = 100;
-        text_conf.fontSize = 25;
+        icon_size = 17;
 
         if (gui.lmb_click) {
           gui.lmb_click_el = handle_id;
@@ -2113,15 +2215,15 @@ static void ui_slider(Clay_ElementId id, float *state) {
 
       if (held) {
         float progress_px = jeux.mouse_screen_x - bbox.x;
-        *state = progress_px / bbox.width;
+        *state = clamp(0, 1, progress_px / bbox.width);
       }
 
-      CLAY_TEXT(CLAY_STRING("V"), CLAY_TEXT_CONFIG(text_conf));
+      ui_icon(gl_Model_UiSliderHandle, icon_size);
     }
   }
 }
 
-static bool ui_arrow_button(void) {
+static bool ui_arrow_button(bool left) {
 
   bool click = false;
 
@@ -2129,7 +2231,7 @@ static bool ui_arrow_button(void) {
     .layout.sizing = { CLAY_SIZING_FIXED(18), CLAY_SIZING_GROW(0) },
   }) {
 
-    Clay_TextElementConfig text_conf = { .fontSize = 18, .textColor = ink };
+    size_t icon_size = 14;
 
     CLAY({
       .floating.attachTo = CLAY_ATTACH_TO_PARENT,
@@ -2137,11 +2239,15 @@ static bool ui_arrow_button(void) {
       .floating.attachPoints.parent = CLAY_ATTACH_POINT_CENTER_CENTER,
     }) {
       if (Clay_Hovered()) {
-        text_conf.textColor.r = 100;
-        text_conf.fontSize = 28;
+        icon_size = 17;
         if (gui.lmb_click) click = true;
       }
-      CLAY_TEXT(CLAY_STRING("X"), CLAY_TEXT_CONFIG(text_conf));
+
+      f4x4 mvp = f4x4_move((f3) { 0.5, 0.5, 0 });
+      /* you can also use f4x4_turn() here to rotate components around their center */
+      mvp = f4x4_mul_f4x4(mvp, f4x4_scale3((f3) { left ? 1 : -1, 1, 1 }));
+      mvp = f4x4_mul_f4x4(mvp, f4x4_move((f3) { -0.5f, -0.5f, 0 }));
+      ui_icon_f4x4(gl_Model_UiArrowButton, icon_size, mvp);
     }
   };
 
@@ -2155,11 +2261,11 @@ static void ui_picker(uint8_t *state, uint8_t option_count, Clay_String *labels)
     .layout.sizing.width  = CLAY_SIZING_GROW(0),
     .layout.sizing.height = CLAY_SIZING_GROW(0),
   }) {
-    if (ui_arrow_button()) *state = (*state == 0 ? option_count : *state) - 1;
+    if (ui_arrow_button(true)) *state = (*state == 0 ? option_count : *state) - 1;
     CLAY({ .layout.sizing.width  = CLAY_SIZING_GROW(0) });
     CLAY_TEXT(labels[*state], CLAY_TEXT_CONFIG(text_conf));
     CLAY({ .layout.sizing.width  = CLAY_SIZING_GROW(0) });
-    if (ui_arrow_button()) *state = (*state + 1) % option_count;
+    if (ui_arrow_button(false)) *state = (*state + 1) % option_count;
   }
 }
 
@@ -2167,7 +2273,6 @@ static void ui_main(void) {
   bool mouse_up = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_RELEASED_THIS_FRAME;
   if (mouse_up) gui.lmb_click_el = (Clay_ElementId) { 0 };
   gui.lmb_click = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_PRESSED_THIS_FRAME;
-  gui.options.open = true;
 
   /* HUD */
   {
@@ -2185,14 +2290,19 @@ static void ui_main(void) {
         .border = { .color = wood, .width = { 2, 2, 2, 2 }},
         .backgroundColor = Clay_Hovered() ? paper_hover : paper,
         .layout.sizing = { CLAY_SIZING_FIXED(32), CLAY_SIZING_FIXED(32) },
-        .cornerRadius = CLAY_CORNER_RADIUS(16)
+        .cornerRadius = CLAY_CORNER_RADIUS(16),
       }) {
         if (Clay_Hovered() && gui.lmb_click) {
           gui.options.open ^= 1;
-          SDL_Log("hover! %d\n", gui.options.open);
         }
-        /* icon here */
 
+        /* icon here */
+        CLAY({
+          .layout.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+          .layout.childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER },
+        }) {
+          ui_icon(gl_Model_UiOptions, 22);
+        }
       }
     }
   }
@@ -2203,7 +2313,7 @@ static void ui_main(void) {
       .id = CLAY_ID("OptionsWindow"),
       .layout.padding = { 24, 24, 8, 8 },
       .layout.layoutDirection = CLAY_TOP_TO_BOTTOM,
-      .layout.sizing = { CLAY_SIZING_FIXED(300), CLAY_SIZING_FIXED(170) },
+      .layout.sizing = { CLAY_SIZING_FIXED(400), CLAY_SIZING_FIXED(170) },
       .floating.attachTo = CLAY_ATTACH_TO_ROOT,
       .floating.offset = { 100, 100 },
       .border = { .color = wood, .width = { 3, 3, 3, 3 }},
@@ -2211,7 +2321,6 @@ static void ui_main(void) {
     }) {
 
       CLAY({
-        .id = CLAY_ID("WindowTitle"),
         .layout.padding.top = 10,
         .layout.padding.bottom = 15,
         .layout.sizing = { .width = CLAY_SIZING_GROW(0) }

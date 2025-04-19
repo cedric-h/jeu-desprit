@@ -1,3 +1,4 @@
+autocmd BufRead,BufNewFile *.h set filetype=c
 augroup highlight_f2
   autocmd!
   autocmd FileType c syntax match HighlightF2 /\<f2\>/
