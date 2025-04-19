@@ -2310,7 +2310,8 @@ static void ui_main(void) {
     }
   }
 
-  {
+  /* options window */
+  if (gui.options.open) {
     CLAY({
       .id = CLAY_ID("OptionsWindow"),
       .floating.attachTo = CLAY_ATTACH_TO_ROOT,
@@ -2358,7 +2359,14 @@ static void ui_main(void) {
 
           CLAY({ .layout.sizing = { CLAY_SIZING_GROW(0) } });
 
-          CLAY({ .layout.padding.top = 4 }) { ui_icon(gl_Model_UiEcksButton, 20); }; 
+          CLAY({ .layout.padding.top = 4 }) {
+            size_t icon_size = 20;
+            if (Clay_Hovered()) {
+              icon_size = 22;
+              if (gui.lmb_click) gui.options.open ^= 1;
+            }
+            ui_icon(gl_Model_UiEcksButton, icon_size);
+          }; 
         }
       }
 
@@ -2438,33 +2446,6 @@ static void ui_main(void) {
           }
         };
       }
-    }
-  }
-
-  /* options window */
-  if (/* gui.options.open, */ 0) {
-    CLAY({
-      .id = CLAY_ID("OptionsWindow"),
-      .layout.padding = { 24, 24, 8, 8 },
-      .layout.layoutDirection = CLAY_TOP_TO_BOTTOM,
-      .layout.sizing = { CLAY_SIZING_FIXED(400), CLAY_SIZING_FIXED(170) },
-      .floating.attachTo = CLAY_ATTACH_TO_ROOT,
-      .floating.offset = { 100, 100 },
-      .border = { .color = wood, .width = { 3, 3, 3, 3 }},
-      .backgroundColor = paper,
-    }) {
-
-      CLAY({
-        .layout.padding.top = 10,
-        .layout.padding.bottom = 15,
-        .layout.sizing = { .width = CLAY_SIZING_GROW(0) }
-      }) {
-
-        CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
-        CLAY_TEXT(CLAY_STRING("OPTIONS"), CLAY_TEXT_CONFIG({ .fontSize = text_title, .textColor = ink }));
-        CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
-      }
-
     }
   }
 }
