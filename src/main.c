@@ -281,6 +281,7 @@ typedef enum {
   gl_Model_UiWindowCorner,
   gl_Model_UiWindowTop,
   gl_Model_UiWindowBorder,
+  gl_Model_UiWindowBg,
 
   gl_Model_COUNT,
 } gl_Model;
@@ -298,6 +299,7 @@ typedef enum {
 #include "../svg/include/UiWindowCorner.svg.h"
 #include "../svg/include/UiWindowTop.svg.h"
 #include "../svg/include/UiWindowBorder.svg.h"
+#include "../svg/include/UiWindowBg.svg.h"
 #include "walk.h"
 
 struct {
@@ -330,6 +332,7 @@ struct {
   [gl_Model_UiWindowCorner] = { .vtx = model_vtx_UiWindowCorner, .vtx_count = jx_COUNT(model_vtx_UiWindowCorner), .tri = model_tri_UiWindowCorner, .tri_count = jx_COUNT(model_tri_UiWindowCorner) },
   [gl_Model_UiWindowTop   ] = { .vtx = model_vtx_UiWindowTop   , .vtx_count = jx_COUNT(model_vtx_UiWindowTop   ), .tri = model_tri_UiWindowTop   , .tri_count = jx_COUNT(model_tri_UiWindowTop   ) },
   [gl_Model_UiWindowBorder] = { .vtx = model_vtx_UiWindowBorder, .vtx_count = jx_COUNT(model_vtx_UiWindowBorder), .tri = model_tri_UiWindowBorder, .tri_count = jx_COUNT(model_tri_UiWindowBorder) },
+  [gl_Model_UiWindowBg    ] = { .vtx = model_vtx_UiWindowBg    , .vtx_count = jx_COUNT(model_vtx_UiWindowBg    ), .tri = model_tri_UiWindowBg    , .tri_count = jx_COUNT(model_tri_UiWindowBg    ) },
 };
 
 typedef struct {
@@ -2307,8 +2310,139 @@ static void ui_main(void) {
     }
   }
 
+  {
+    CLAY({
+      .id = CLAY_ID("OptionsWindow"),
+      .floating.attachTo = CLAY_ATTACH_TO_ROOT,
+      .layout.layoutDirection = CLAY_LEFT_TO_RIGHT,
+      .floating.offset = { 200, 150 },
+    }) {
+
+      Clay_ElementDeclaration floating = {
+        .floating.attachTo = CLAY_ATTACH_TO_PARENT,
+        .floating.attachPoints.element = CLAY_ATTACH_POINT_CENTER_CENTER,
+        .floating.attachPoints.parent = CLAY_ATTACH_POINT_CENTER_CENTER,
+        .floating.pointerCaptureMode = CLAY_POINTER_CAPTURE_MODE_PASSTHROUGH
+      };
+
+      Clay_ElementDeclaration bg = floating;
+      bg.floating.attachPoints.element = CLAY_ATTACH_POINT_LEFT_TOP;
+      bg.floating.offset.x = -53;
+      bg.floating.offset.y = -94;
+      CLAY(bg) {
+        float ar = (float)270 * (float)model_UiWindowBg_size_x / (float)model_UiWindowBg_size_y;
+        ui_icon(gl_Model_UiWindowBg, ar);
+      }
+
+      Clay_ElementDeclaration corner = floating;
+      corner.floating.offset.x = -20;
+      corner.floating.offset.y =   5;
+      CLAY(corner) {
+        float ar = (float)75 * (float)model_UiWindowCorner_size_x / (float)model_UiWindowCorner_size_y;
+        ui_icon(gl_Model_UiWindowCorner, ar);
+        CLAY(floating) { ui_icon(gl_Model_UiOptions, 50); }
+      }
+
+      Clay_ElementDeclaration top = floating;
+      top.floating.attachPoints.element = CLAY_ATTACH_POINT_LEFT_CENTER;
+      CLAY(top) {
+        float ar = (float)50 * (float)model_UiWindowTop_size_x / (float)model_UiWindowTop_size_y;
+        ui_icon(gl_Model_UiWindowTop, ar);
+
+        Clay_ElementDeclaration top_content = floating;
+        top_content.floating.offset.x = 26;
+        top_content.floating.offset.y = 2;
+        top_content.layout.sizing.width = CLAY_SIZING_FIXED(250);
+        CLAY(top_content) {
+          CLAY_TEXT(CLAY_STRING("OPTIONS"), CLAY_TEXT_CONFIG({ .fontSize = 30, .textColor = ink }));
+
+          CLAY({ .layout.sizing = { CLAY_SIZING_GROW(0) } });
+
+          CLAY({ .layout.padding.top = 4 }) { ui_icon(gl_Model_UiEcksButton, 20); }; 
+        }
+      }
+
+      Clay_ElementDeclaration border = floating;
+      border.floating.attachPoints.element = CLAY_ATTACH_POINT_LEFT_TOP;
+      border.floating.offset.x = -50;
+      border.floating.offset.y = -66;
+      CLAY(border) {
+        float ar = (float)215 * (float)model_UiWindowBorder_size_x / (float)model_UiWindowBorder_size_y;
+        ui_icon(gl_Model_UiWindowBorder, ar);
+
+        CLAY({
+          .floating.attachTo = CLAY_ATTACH_TO_PARENT,
+          .floating.attachPoints.element = CLAY_ATTACH_POINT_LEFT_TOP,
+          .floating.attachPoints.parent = CLAY_ATTACH_POINT_LEFT_TOP,
+          .floating.offset.y = 80,
+          .floating.offset.x = 5,
+          .floating.pointerCaptureMode = CLAY_POINTER_CAPTURE_MODE_PASSTHROUGH,
+          .layout.sizing = { CLAY_SIZING_FIXED(382), CLAY_SIZING_FIXED(220) },
+          .layout.padding = { 24, 24, 24, 24 },
+          // .border = { .color = wood, .width = { 3, 3, 3, 3 }},
+        }) {
+
+          CLAY({ .layout.sizing.height = CLAY_SIZING_FIXED(30) });
+
+          CLAY({
+              .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM },
+              .layout.sizing.width = CLAY_SIZING_GROW(0)
+          }) {
+
+            Clay_ElementDeclaration pair = {
+              .layout.sizing.width = CLAY_SIZING_GROW(0),
+              .layout.padding.top = 10,
+              .layout.padding.bottom = 10,
+            };
+
+            Clay_ElementDeclaration pair_inner = {
+              .layout.sizing.width = CLAY_SIZING_GROW(0),
+              .layout.sizing.height = CLAY_SIZING_GROW(0),
+            };
+
+            Clay_TextElementConfig label = {
+              .fontSize = text_body,
+              .textColor = ink
+            };
+
+            CLAY(pair) {
+
+              CLAY(pair_inner) {
+                CLAY_TEXT(CLAY_STRING("PERSPECTIVE"), CLAY_TEXT_CONFIG(label));
+              }
+
+              CLAY({ .layout.sizing = { .width = CLAY_SIZING_GROW(0) } }) {
+                CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
+                ui_checkbox(&gui.options.perspective);
+                CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
+              }
+
+            }
+
+            CLAY(pair) {
+              CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("FOV"), CLAY_TEXT_CONFIG(label)); }
+              CLAY(pair_inner) { ui_slider(CLAY_ID("FOV_SLIDER"), &gui.options.fov); }
+            }
+
+            CLAY(pair) {
+              CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("ANTIALIASING"), CLAY_TEXT_CONFIG(label)); }; 
+              Clay_String labels[] = {
+                [gl_AntiAliasingApproach_None  ] = CLAY_STRING("NONE"),
+                [gl_AntiAliasingApproach_Linear] = CLAY_STRING("Linear"),
+                [gl_AntiAliasingApproach_FXAA  ] = CLAY_STRING("FXAA"),
+                [gl_AntiAliasingApproach_2XSSAA] = CLAY_STRING("2x SSAA"),
+                [gl_AntiAliasingApproach_4XSSAA] = CLAY_STRING("4x SSAA"),
+              };
+              CLAY(pair_inner) { ui_picker(&gui.options.antialiasing, gl_AntiAliasingApproach_COUNT, labels); }; 
+            }
+          }
+        };
+      }
+    }
+  }
+
   /* options window */
-  if (gui.options.open) {
+  if (/* gui.options.open, */ 0) {
     CLAY({
       .id = CLAY_ID("OptionsWindow"),
       .layout.padding = { 24, 24, 8, 8 },
@@ -2331,58 +2465,6 @@ static void ui_main(void) {
         CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
       }
 
-      CLAY({
-          .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM },
-          .layout.sizing.width = CLAY_SIZING_GROW(0)
-      }) {
-
-        Clay_ElementDeclaration pair = {
-          .layout.sizing.width = CLAY_SIZING_GROW(0),
-          .layout.padding.top = 10,
-          .layout.padding.bottom = 10,
-        };
-
-        Clay_ElementDeclaration pair_inner = {
-          .layout.sizing.width = CLAY_SIZING_GROW(0),
-          .layout.sizing.height = CLAY_SIZING_GROW(0),
-        };
-
-        Clay_TextElementConfig label = {
-          .fontSize = text_body,
-          .textColor = ink
-        };
-
-        CLAY(pair) {
-
-          CLAY(pair_inner) {
-            CLAY_TEXT(CLAY_STRING("PERSPECTIVE"), CLAY_TEXT_CONFIG(label));
-          }
-
-          CLAY({ .layout.sizing = { .width = CLAY_SIZING_GROW(0) } }) {
-            CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
-            ui_checkbox(&gui.options.perspective);
-            CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
-          }
-
-        }
-
-        CLAY(pair) {
-          CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("FOV"), CLAY_TEXT_CONFIG(label)); }
-          CLAY(pair_inner) { ui_slider(CLAY_ID("FOV_SLIDER"), &gui.options.fov); }
-        }
-
-        CLAY(pair) {
-          CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("ANTIALIASING"), CLAY_TEXT_CONFIG(label)); }; 
-          Clay_String labels[] = {
-            [gl_AntiAliasingApproach_None  ] = CLAY_STRING("NONE"),
-            [gl_AntiAliasingApproach_Linear] = CLAY_STRING("Linear"),
-            [gl_AntiAliasingApproach_FXAA  ] = CLAY_STRING("FXAA"),
-            [gl_AntiAliasingApproach_2XSSAA] = CLAY_STRING("2x SSAA"),
-            [gl_AntiAliasingApproach_4XSSAA] = CLAY_STRING("4x SSAA"),
-          };
-          CLAY(pair_inner) { ui_picker(&gui.options.antialiasing, gl_AntiAliasingApproach_COUNT, labels); }; 
-        }
-      }
     }
   }
 }
