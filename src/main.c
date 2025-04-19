@@ -2092,7 +2092,7 @@ Clay_Color paper_hover = { 128, 101,  77, 255 };
 Clay_Color wood        = {  27,  15,   7, 255 };
 Clay_Color ink         = {   0,   0,   0, 255 };
 
-uint16_t text_body = 16;
+uint16_t text_body = 24;
 uint16_t text_title = 24;
 
 typedef enum {
@@ -2391,8 +2391,8 @@ static void ui_main(void) {
 
             Clay_ElementDeclaration pair = {
               .layout.sizing.width = CLAY_SIZING_GROW(0),
-              .layout.padding.top = 10,
-              .layout.padding.bottom = 10,
+              .layout.padding.top = 20,
+              .layout.padding.bottom = 20,
             };
 
             Clay_ElementDeclaration pair_inner = {
