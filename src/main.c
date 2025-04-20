@@ -2558,7 +2558,12 @@ static void ui_wabisabi_window(
   ui_WabisabiWindow *window,
   void content_fn(void)
 ) {
-#define WABI_DEBUG_BOUNDS 0
+#if 0
+  Clay_BorderElementConfig debug_border = { .color = { 255, 0, 0, 255 }, .width = { 2, 2, 2, 2 } };
+#else
+  /* no debug for you! */
+  Clay_BorderElementConfig debug_border = {0};
+#endif
 
   /* currently window_title is used to make an ID for the draggable
    * area of the window, which needs to persist across frames so we can
@@ -2572,9 +2577,7 @@ static void ui_wabisabi_window(
     .floating.offset = { window->x, window->y },
     .layout.sizing.width  = CLAY_SIZING_FIXED(400),
     .layout.sizing.height = CLAY_SIZING_FIT(100, 400),
-    #if WABI_DEBUG_BOUNDS
-    .border = { .color = { 255, 0, 0, 255 }, .width = { 2, 2, 2, 2 }},
-    #endif
+    .border = debug_border,
   }) {
 
     /* Wabisabi Window - Background */
@@ -2612,9 +2615,7 @@ static void ui_wabisabi_window(
       .layout.childAlignment.x = CLAY_ALIGN_X_CENTER,
       .layout.childAlignment.y = CLAY_ALIGN_Y_CENTER,
 
-      #if WABI_DEBUG_BOUNDS
-      .border = { .color = { 255, 0, 0, 255 }, .width = { 2, 2, 2, 2 }},
-      #endif
+      .border = debug_border,
     }) {
       ui_icon(gl_Model_UiOptions, 50);
     }
@@ -2651,12 +2652,8 @@ static void ui_wabisabi_window(
           CLAY({
             .layout.sizing.width  = CLAY_SIZING_GROW(0),
             .layout.sizing.height = CLAY_SIZING_GROW(0),
-
             .image = UI_IMAGE_FIT(UiWindowTop),
-
-            #if WABI_DEBUG_BOUNDS
-            .border = { .color = { 255, 0, 0, 255 }, .width = { 2, 2, 2, 2 }},
-            #endif
+            .border = debug_border,
           }) {
           }
 
@@ -2714,9 +2711,7 @@ static void ui_wabisabi_window(
         .layout.padding.left = 24,
         .layout.padding.right = 24,
 
-        #if WABI_DEBUG_BOUNDS
-        .border = { .color = { 0, 255, 0, 255 }, .width = { 4, 4, 4, 4 }},
-        #endif
+        .border = debug_border,
       }) {
 
         /* Wabisabi Window - Bottom Border */
@@ -2740,7 +2735,6 @@ static void ui_wabisabi_window(
     }
 
   }
-#undef WABI_DEBUG_BOUNDS
 }
 
 
@@ -2821,8 +2815,8 @@ static void ui_window_content_options(void) {
         bool released = ui_slider(
           CLAY_ID("UI SCALE SLIDER"),
           &gui.options.ui_scale_tmp,
-          0.2,
-          2
+          ui_scale_min,
+          ui_scale_max
         );
 
         if (released) {
