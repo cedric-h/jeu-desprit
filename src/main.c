@@ -855,15 +855,12 @@ static SDL_AppResult gl_init(void) {
         ,
         .fs = AA_FS_PREAMBLE
           "  vec2 inv_vp = 1.0 / u_win_size;\n"
-          /* this is a bit of a joke but there's a version of this that looks
-           * exactly like None except the glTexParameteri is GL_LINEAR and is actually good;
-           * a version like that worked on mac with a high dpi but does nothing on windows with dpi=1
-           * can maybe just skip this dpi option when dpi = 1, * needs investigating */
           "  frag_color = 0.25f*texture(u_tex, v_uv + inv_vp*vec2(-.5f, -.5f)) +\n"
           "               0.25f*texture(u_tex, v_uv + inv_vp*vec2( .5f, -.5f)) +\n"
           "               0.25f*texture(u_tex, v_uv + inv_vp*vec2(-.5f,  .5f)) +\n"
           "               0.25f*texture(u_tex, v_uv + inv_vp*vec2( .5f,  .5f));\n"
 #ifdef SRGB
+
           "  frag_color = vec4(pow(abs(frag_color.xyz), vec3(1.0 / 2.2)), 1);\n"
 #endif
           "}\n"
@@ -1958,11 +1955,14 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       .matrix = f4x4_scale(1)
     };
 
-    /* ui */
+    /* MARK: draw ui */
     {
       Clay_RenderCommandArray cmds;
 
-      {
+      /* Because of my proclivity to use Clay_Hovered() instead of
+       * Clay_OnHover (because I think the callback is ugly), we have
+       * to layout 3 times/frame to prevent there from being any instability */
+      for (int i = 0; i < 3; i++) {
         Clay_SetPointerState(
           (Clay_Vector2) { jeux.mouse_ui_x, jeux.mouse_ui_y },
           jeux.mouse_lmb_down
@@ -1971,7 +1971,6 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         Clay_BeginLayout();
 
         ui_main();
-
 
         cmds = Clay_EndLayout();
       }
