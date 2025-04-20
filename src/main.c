@@ -248,14 +248,16 @@ static f4x4 f4x4_move(f3 pos) {
   return res;
 }
 
-
-#define ANTIALIAS_NONE    0
-#define ANTIALIAS_LINEAR  1
-#define ANTIALIAS_FXAA    2
-#define ANTIALIAS_2xSSAA  3
-#define ANTIALIAS_4xSSAA  4
-#define CURRENT_ALIASING ANTIALIAS_4xSSAA
 #define SRGB
+
+typedef enum {
+  gl_AntiAliasingApproach_None,
+  gl_AntiAliasingApproach_Linear,
+  gl_AntiAliasingApproach_FXAA,
+  gl_AntiAliasingApproach_2XSSAA,
+  gl_AntiAliasingApproach_4XSSAA,
+  gl_AntiAliasingApproach_COUNT
+} gl_AntiAliasingApproach;
 
 typedef struct { uint8_t r, g, b, a; } Color;
 typedef struct { float x, y, z, u, v, size; Color color;} gl_text_Vtx;
@@ -342,6 +344,7 @@ typedef struct {
   /* doesn't premultiply in camera matrix for you */
   bool two_dee_ui;
 } gl_ModelDraw;
+
 typedef struct {
   gl_geo_Vtx vtx[9999];
   gl_geo_Vtx *vtx_wtr;
@@ -352,15 +355,6 @@ typedef struct {
   GLuint buf_vtx;
   GLuint buf_idx;
 } gl_DynGeo;
-
-typedef enum {
-  gl_AntiAliasingApproach_None,
-  gl_AntiAliasingApproach_Linear,
-  gl_AntiAliasingApproach_FXAA,
-  gl_AntiAliasingApproach_2XSSAA,
-  gl_AntiAliasingApproach_4XSSAA,
-  gl_AntiAliasingApproach_COUNT
-} gl_AntiAliasingApproach;
 
 typedef struct {
   bool open;
@@ -448,6 +442,7 @@ static struct {
 
     /* pp is "post processing" - used for AA and FX */
     struct {
+      /* some AA approaches require a larger framebuffer */
       float fb_scale;
 
       /* jeux.win_size * SDL_GetWindowPixelDensity() */
@@ -455,11 +450,14 @@ static struct {
 
       GLuint buf_vtx;
 
-      GLuint shader; /* postprocessing */
-      GLint shader_u_win_size;
-      GLint shader_u_tex_color;
-      GLint shader_u_tex_depth;
-      GLint shader_a_pos;
+      gl_AntiAliasingApproach current_aa;
+      struct {
+        GLuint shader;
+        GLint shader_u_win_size;
+        GLint shader_u_tex_color;
+        GLint shader_u_tex_depth;
+        GLint shader_a_pos;
+      } aa_shader[gl_AntiAliasingApproach_COUNT];
 
       /* resources inside here need to be recreated
        * when the application window is resized. */
@@ -497,15 +495,6 @@ static struct {
 } jeux = {
   .win_size_x = 800,
   .win_size_y = 450,
-  .gl.pp = {
-#if   CURRENT_ALIASING == ANTIALIAS_4xSSAA
-    .fb_scale = 4.0f,
-#elif CURRENT_ALIASING == ANTIALIAS_2xSSAA
-    .fb_scale = 2.0f,
-#else
-    .fb_scale = 1.0f,
-#endif
-  },
 
   .gui = {
     .options.window.open = true,
@@ -513,8 +502,8 @@ static struct {
     .options.window.y = 68,
     .options.antialiasing = gl_AntiAliasingApproach_4XSSAA,
     .options.fov = 70.0f,
-    .options.ui_scale = 0.5f,
-    .options.ui_scale_tmp = 0.5f,
+    .options.ui_scale = 1.0f,
+    .options.ui_scale_tmp = 1.0f,
   }
 };
 
@@ -628,6 +617,17 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
   }
 
   return SDL_APP_CONTINUE;
+}
+
+static void gl_resize(void);
+static void gl_set_antialiasing_approach(gl_AntiAliasingApproach aa) {
+  jeux.gl.pp.current_aa = aa;
+
+  jeux.gl.pp.fb_scale = 1.0f;
+  if (aa == gl_AntiAliasingApproach_4XSSAA) jeux.gl.pp.fb_scale = 4.0f;
+  if (aa == gl_AntiAliasingApproach_2XSSAA) jeux.gl.pp.fb_scale = 2.0f;
+
+  gl_resize();
 }
 
 static void gl_resize(void);
@@ -789,37 +789,66 @@ static SDL_AppResult gl_init(void) {
           "  gl_FragColor = v_color * v_color.a * alpha;\n"
           "}\n"
       },
-      {
-        .dst = &jeux.gl.pp.shader,
-        .debug_name = "pp",
-        .vs =
-          "#version 300 es\n"
-          "in vec4 a_pos;\n"
-          "out vec2 v_uv;\n"
-          "void main() {\n"
-          "  gl_Position = vec4(a_pos.xy, 0.0, 1.0);\n"
-          "  v_uv = gl_Position.xy*0.5 + vec2(0.5);\n"
-          "}\n"
-        ,
-        .fs =
 
-// No AA
-          "#version 300 es\n"
-          "precision mediump float;\n"
-          "in vec2 v_uv;\n"
-          "uniform sampler2D u_tex;\n"
-          "uniform sampler2D u_tex_depth;\n"
-          "uniform vec2 u_win_size;\n"
-          "out vec4 frag_color;\n"
-          "void main() {\n"
+#define AA_VERTEX_SHADER \
+          "#version 300 es\n" \
+          "in vec4 a_pos;\n" \
+          "out vec2 v_uv;\n" \
+          "void main() {\n" \
+          "  gl_Position = vec4(a_pos.xy, 0.0, 1.0);\n" \
+          "  v_uv = gl_Position.xy*0.5 + vec2(0.5);\n" \
+          "}\n"
+
+#define AA_FS_PREAMBLE \
+          "#version 300 es\n" \
+          "precision mediump float;\n" \
+          "in vec2 v_uv;\n" \
+          "uniform sampler2D u_tex;\n" \
+          "uniform sampler2D u_tex_depth;\n" \
+          "uniform vec2 u_win_size;\n" \
+          "out vec4 frag_color;\n" \
+          "void main() {\n" \
           "  gl_FragDepth = texture(u_tex_depth, v_uv).r;\n"
-#if CURRENT_ALIASING == ANTIALIAS_NONE || CURRENT_ALIASING == ANTIALIAS_LINEAR
+
+      {
+        .dst = &jeux.gl.pp.aa_shader[gl_AntiAliasingApproach_None].shader,
+        .debug_name = "pp_aa_none",
+        .vs = AA_VERTEX_SHADER
+        ,
+        .fs = AA_FS_PREAMBLE
           "  frag_color = texture(u_tex, v_uv);\n"
 #ifdef SRGB
           "  frag_color = vec4(pow(abs(frag_color.xyz), vec3(1.0 / 2.2)), 1);\n"
 #endif
+          "}\n"
+      },
 
-#elif CURRENT_ALIASING == ANTIALIAS_2xSSAA
+      /* technically identical to None but /shrug */
+      {
+        .dst = &jeux.gl.pp.aa_shader[gl_AntiAliasingApproach_Linear].shader,
+        .debug_name = "pp_aa_linear",
+        .vs = AA_VERTEX_SHADER
+        ,
+        .fs = AA_FS_PREAMBLE
+          "  vec2 inv_vp = 1.0 / u_win_size;\n"
+          /* this is a bit of a joke but there's probably a version of this that looks
+           * exactly like None except the glTexParameteri is GL_LINEAR and is actually good */
+          "  frag_color = 0.25f*texture(u_tex, v_uv + inv_vp*vec2(-.5f, -.5f)) +\n"
+          "               0.25f*texture(u_tex, v_uv + inv_vp*vec2( .5f, -.5f)) +\n"
+          "               0.25f*texture(u_tex, v_uv + inv_vp*vec2(-.5f,  .5f)) +\n"
+          "               0.25f*texture(u_tex, v_uv + inv_vp*vec2( .5f,  .5f));\n"
+#ifdef SRGB
+          "  frag_color = vec4(pow(abs(frag_color.xyz), vec3(1.0 / 2.2)), 1);\n"
+#endif
+          "}\n"
+      },
+
+      {
+        .dst = &jeux.gl.pp.aa_shader[gl_AntiAliasingApproach_2XSSAA].shader,
+        .debug_name = "pp_aa_2xSSAA",
+        .vs = AA_VERTEX_SHADER
+        ,
+        .fs = AA_FS_PREAMBLE
           "  vec2 inv_vp = 1.0 / u_win_size;\n"
           "  frag_color = vec4(0, 0, 0, 1);\n"
           "  frag_color.xyz += 0.25*texture(u_tex, v_uv + (vec2(-0.25, -0.25) * inv_vp)).xyz;\n"
@@ -829,8 +858,15 @@ static SDL_AppResult gl_init(void) {
 #ifdef SRGB
           "  frag_color = vec4(pow(abs(frag_color.xyz), vec3(1.0 / 2.2)), 1);\n"
 #endif
+          "}\n"
+      },
 
-#elif CURRENT_ALIASING == ANTIALIAS_4xSSAA
+      {
+        .dst = &jeux.gl.pp.aa_shader[gl_AntiAliasingApproach_4XSSAA].shader,
+        .debug_name = "pp_aa_4xSSAA",
+        .vs = AA_VERTEX_SHADER
+        ,
+        .fs = AA_FS_PREAMBLE
           "  vec2 inv_vp = 1.0 / u_win_size;\n"
           "  frag_color = vec4(0, 0, 0, 1);\n"
           "  frag_color.xyz += 0.0625*texture(u_tex, v_uv + (vec2(-0.375, -0.375) * inv_vp)).xyz;\n"
@@ -852,8 +888,16 @@ static SDL_AppResult gl_init(void) {
 #ifdef SRGB
           "  frag_color = vec4(pow(abs(frag_color.xyz), vec3(1.0 / 2.2)), 1);\n"
 #endif
+          "}\n"
+      },
 
-#elif CURRENT_ALIASING == ANTIALIAS_FXAA
+      {
+        .dst = &jeux.gl.pp.aa_shader[gl_AntiAliasingApproach_FXAA].shader,
+        .debug_name = "pp_aa_FXAA",
+        .vs = AA_VERTEX_SHADER
+        ,
+        .fs = AA_FS_PREAMBLE
+
 #define SRGB_SAMPLE(x) "pow(abs(texture(u_tex, " x ").xyz), vec3(1.0 / 2.2))"
 
             /* https://github.com/LiveMirror/NVIDIA-Direct3D-SDK-11/blob/a2d3cc46179364c9faa3e218eff230883badcd79/FXAA/FxaaShader.h#L1 */
@@ -911,9 +955,6 @@ static SDL_AppResult gl_init(void) {
             "    frag_color.xyz=rgbB;\n"
             "}\n"
             "frag_color.a = 1.0;\n"
-#else
-#error "no such aliasing!"
-#endif
           "}\n"
       }
     };
@@ -963,7 +1004,7 @@ static SDL_AppResult gl_init(void) {
   }
 
   /* fullscreen tri for post-processing */
-  {
+  for (int i = 0; i < jx_COUNT(jeux.gl.pp.aa_shader); i++) {
     /* create vbo, fill it */
     glGenBuffers(1, &jeux.gl.pp.buf_vtx);
     glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.pp.buf_vtx);
@@ -974,10 +1015,11 @@ static SDL_AppResult gl_init(void) {
     };
     glBufferData(GL_ARRAY_BUFFER, sizeof(vtx), vtx, GL_STATIC_DRAW);
 
-    jeux.gl.pp.shader_u_win_size  = glGetUniformLocation(jeux.gl.pp.shader, "u_win_size");
-    jeux.gl.pp.shader_u_tex_color = glGetUniformLocation(jeux.gl.pp.shader, "u_tex_color");
-    jeux.gl.pp.shader_u_tex_depth = glGetUniformLocation(jeux.gl.pp.shader, "u_tex_depth");
-    jeux.gl.pp.shader_a_pos       = glGetAttribLocation( jeux.gl.pp.shader, "a_pos");
+    GLuint shader = jeux.gl.pp.aa_shader[i].shader;
+    jeux.gl.pp.aa_shader[i].shader_u_win_size  = glGetUniformLocation(shader, "u_win_size");
+    jeux.gl.pp.aa_shader[i].shader_u_tex_color = glGetUniformLocation(shader, "u_tex_color");
+    jeux.gl.pp.aa_shader[i].shader_u_tex_depth = glGetUniformLocation(shader, "u_tex_depth");
+    jeux.gl.pp.aa_shader[i].shader_a_pos       = glGetAttribLocation( shader, "a_pos");
   }
 
   /* dynamic geometry buffer */
@@ -1126,7 +1168,9 @@ static SDL_AppResult gl_init(void) {
 
   }
 
-  gl_resize();
+  /* this calls gl_resize(), no need to explicitly
+   * init framebuffer */
+  gl_set_antialiasing_approach(gl_AntiAliasingApproach_4XSSAA);
 
   /* initialize text rendering */
   {
@@ -1219,6 +1263,7 @@ static void gl_resize(void) {
   /* passing in zero is ignored here, so this doesn't throw an error if screen has never inited */
   glDeleteFramebuffers(1, &jeux.gl.pp.screen.pp_fb);
   glDeleteTextures(1, &jeux.gl.pp.screen.pp_tex_color);
+  glDeleteTextures(1, &jeux.gl.pp.screen.pp_tex_depth);
 
   /* create postprocessing framebuffer - writes to jeux.gl.pp.screen.pp_tex_color, jeux.gl.pp.screen.pp_fb */
   {
@@ -1229,13 +1274,16 @@ static void gl_resize(void) {
     {
       glGenTextures(1, &jeux.gl.pp.screen.pp_tex_color);
       glBindTexture(GL_TEXTURE_2D, jeux.gl.pp.screen.pp_tex_color);
-#if CURRENT_ALIASING == ANTIALIAS_LINEAR || CURRENT_ALIASING == ANTIALIAS_FXAA
-      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-#else
-      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-#endif
+
+      if (jeux.gl.pp.current_aa == gl_AntiAliasingApproach_Linear ||
+          jeux.gl.pp.current_aa == gl_AntiAliasingApproach_FXAA) {
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      } else {
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      }
+
       glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
       glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
@@ -2144,20 +2192,21 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       glClearDepthf(0.0f);
       glClear(GL_DEPTH_BUFFER_BIT);
 
-      glUseProgram(jeux.gl.pp.shader);
+      gl_AntiAliasingApproach aaa = jeux.gl.pp.current_aa;
+      glUseProgram(jeux.gl.pp.aa_shader[aaa].shader);
       glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.pp.buf_vtx);
-      glEnableVertexAttribArray(jeux.gl.pp.shader_a_pos);
-      glVertexAttribPointer(jeux.gl.pp.shader_a_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
+      glEnableVertexAttribArray(jeux.gl.pp.aa_shader[aaa].shader_a_pos);
+      glVertexAttribPointer(jeux.gl.pp.aa_shader[aaa].shader_a_pos, 3, GL_FLOAT, GL_FALSE, 0, 0);
 
       glActiveTexture(GL_TEXTURE1);
       glBindTexture(GL_TEXTURE_2D, jeux.gl.pp.screen.pp_tex_depth);
-      glUniform1i(jeux.gl.pp.shader_u_tex_depth, 1);
+      glUniform1i(jeux.gl.pp.aa_shader[aaa].shader_u_tex_depth, 1);
 
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_2D, jeux.gl.pp.screen.pp_tex_color);
-      glUniform1i(jeux.gl.pp.shader_u_tex_color, 0);
+      glUniform1i(jeux.gl.pp.aa_shader[aaa].shader_u_tex_color, 0);
 
-      glUniform2f(jeux.gl.pp.shader_u_win_size, jeux.gl.pp.phys_win_size_x, jeux.gl.pp.phys_win_size_y);
+      glUniform2f(jeux.gl.pp.aa_shader[aaa].shader_u_win_size, jeux.gl.pp.phys_win_size_x, jeux.gl.pp.phys_win_size_y);
       glDrawArrays(GL_TRIANGLES, 0, 3);
 
       glDisable(GL_DEPTH_TEST);
@@ -2443,19 +2492,23 @@ static bool ui_arrow_button(bool left) {
   return click;
 }
 
-static void ui_picker(uint8_t *state, uint8_t option_count, Clay_String *labels) {
+static bool ui_picker(uint8_t *state, uint8_t option_count, Clay_String *labels) {
   Clay_TextElementConfig text_conf = { .fontSize = text_body, .textColor = ink };
+
+  bool changed = false;
 
   CLAY({
     .layout.sizing.width  = CLAY_SIZING_GROW(0),
     .layout.sizing.height = CLAY_SIZING_GROW(0),
   }) {
-    if (ui_arrow_button(true)) *state = (*state == 0 ? option_count : *state) - 1;
+    if (ui_arrow_button(true)) changed = true, *state = (*state == 0 ? option_count : *state) - 1;
     CLAY({ .layout.sizing.width  = CLAY_SIZING_GROW(0) });
     CLAY_TEXT(labels[*state], CLAY_TEXT_CONFIG(text_conf));
     CLAY({ .layout.sizing.width  = CLAY_SIZING_GROW(0) });
-    if (ui_arrow_button(false)) *state = (*state + 1) % option_count;
+    if (ui_arrow_button(false)) changed = true, *state = (*state + 1) % option_count;
   }
+
+  return changed;
 }
 
 /* MARK: END of "DUMB UI COMPONENTS" */
@@ -2706,7 +2759,10 @@ static void ui_window_content_options(void) {
         [gl_AntiAliasingApproach_2XSSAA] = CLAY_STRING("2x SSAA"),
         [gl_AntiAliasingApproach_4XSSAA] = CLAY_STRING("4x SSAA"),
       };
-      CLAY(pair_inner) { ui_picker(&gui.options.antialiasing, gl_AntiAliasingApproach_COUNT, labels); };
+      CLAY(pair_inner) {
+        bool changed = ui_picker(&gui.options.antialiasing, gl_AntiAliasingApproach_COUNT, labels);
+        if (changed) gl_set_antialiasing_approach(gui.options.antialiasing);
+      };
     }
 
     /* ui scale slider */
