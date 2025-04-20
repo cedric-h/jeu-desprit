@@ -76,6 +76,27 @@ static f4x4 f4x4_ortho(float left, float right, float bottom, float top, float n
     return res;
 }
 
+static f4x4 f4x4_perspective(float fovy, float aspect, float near, float far) {
+  float f = 1.0 / tanf(fovy / 2);
+  f4x4 out = { .floats = {
+    f,          0, 0, 0,
+    0, f / aspect, 0, 0,
+    0,          0, 0, -1,
+    0,          0, 0, 0,
+  }};
+
+  {
+    float nf = 1 / (far - near);
+    out.floats[10] = (far + near) * nf;
+    out.floats[14] = 2 * far * near * nf;
+  }
+
+  /* theoretically you can make an infinite frustum like so?
+    out.floats[10] = -1, out.floats[14] = -2 * near; */
+
+  return out;
+}
+
 static f4x4 f4x4_target_to(f3 eye, f3 target, f3 up) {
   float z0 = eye.x - target.x,
         z1 = eye.y - target.y,
@@ -378,10 +399,7 @@ static struct {
   struct {
     struct {
       ui_WabisabiWindow window;
-      bool perspective;
-      float fov;
-      uint8_t antialiasing;
-      float ui_scale, ui_scale_tmp;
+      float ui_scale_tmp;
     } options;
 
     /* the element who owns the current mouse down action */
@@ -411,10 +429,16 @@ static struct {
    * useful for laying things out in pixels, mouse picking etc.
    */
   f4x4 camera, screen, ui_transform;
+  float ui_scale;
   f3 camera_eye;
 
   /* renderer ("gl") */
   struct {
+    struct {
+      bool perspective;
+      float fov;
+    } camera;
+
     struct {
       gl_DynGeo dyn_geo_ui, dyn_geo_world;
       gl_DynGeo *dyn; /* the active gl_DynGeo, probably one of the above */
@@ -450,7 +474,7 @@ static struct {
 
       GLuint buf_vtx;
 
-      gl_AntiAliasingApproach current_aa;
+      size_t /* gl_AntiAliasingApproach */ current_aa;
       struct {
         GLuint shader;
         GLint shader_u_win_size;
@@ -495,15 +519,15 @@ static struct {
 } jeux = {
   .win_size_x = 800,
   .win_size_y = 450,
+  .ui_scale = 1.0f,
+
+  .gl.pp.current_aa = gl_AntiAliasingApproach_4XSSAA,
+  .gl.camera.fov = 70.0f,
 
   .gui = {
     .options.window.open = true,
     .options.window.x = 142,
     .options.window.y = 68,
-    .options.antialiasing = gl_AntiAliasingApproach_4XSSAA,
-    .options.fov = 70.0f,
-    .options.ui_scale = 1.0f,
-    .options.ui_scale_tmp = 1.0f,
   }
 };
 
@@ -831,8 +855,10 @@ static SDL_AppResult gl_init(void) {
         ,
         .fs = AA_FS_PREAMBLE
           "  vec2 inv_vp = 1.0 / u_win_size;\n"
-          /* this is a bit of a joke but there's probably a version of this that looks
-           * exactly like None except the glTexParameteri is GL_LINEAR and is actually good */
+          /* this is a bit of a joke but there's a version of this that looks
+           * exactly like None except the glTexParameteri is GL_LINEAR and is actually good;
+           * a version like that worked on mac with a high dpi but does nothing on windows with dpi=1
+           * can maybe just skip this dpi option when dpi = 1, * needs investigating */
           "  frag_color = 0.25f*texture(u_tex, v_uv + inv_vp*vec2(-.5f, -.5f)) +\n"
           "               0.25f*texture(u_tex, v_uv + inv_vp*vec2( .5f, -.5f)) +\n"
           "               0.25f*texture(u_tex, v_uv + inv_vp*vec2(-.5f,  .5f)) +\n"
@@ -1170,7 +1196,7 @@ static SDL_AppResult gl_init(void) {
 
   /* this calls gl_resize(), no need to explicitly
    * init framebuffer */
-  gl_set_antialiasing_approach(gl_AntiAliasingApproach_4XSSAA);
+  gl_set_antialiasing_approach(jeux.gl.pp.current_aa);
 
   /* initialize text rendering */
   {
@@ -1249,7 +1275,7 @@ static void gl_resize(void) {
   );
 
   {
-    float scale = 1.0f / jeux.gui.options.ui_scale;
+    float scale = 1.0f / jeux.ui_scale;
     jeux.ui_transform = f4x4_ortho(
        0.0f,                  jeux.win_size_x*scale,
        jeux.win_size_y*scale, 0.0f,
@@ -1451,10 +1477,10 @@ static void gl_text_draw_ex(
       }
     }
 
-    *vtx_wtr++ = (gl_text_Vtx) { max_x, min_y, pos.z, max_u, min_v, size*jeux.gui.options.ui_scale, color };
-    *vtx_wtr++ = (gl_text_Vtx) { max_x, max_y, pos.z, max_u, max_v, size*jeux.gui.options.ui_scale, color };
-    *vtx_wtr++ = (gl_text_Vtx) { min_x, max_y, pos.z, min_u, max_v, size*jeux.gui.options.ui_scale, color };
-    *vtx_wtr++ = (gl_text_Vtx) { min_x, min_y, pos.z, min_u, min_v, size*jeux.gui.options.ui_scale, color };
+    *vtx_wtr++ = (gl_text_Vtx) { max_x, min_y, pos.z, max_u, min_v, size*jeux.ui_scale, color };
+    *vtx_wtr++ = (gl_text_Vtx) { max_x, max_y, pos.z, max_u, max_v, size*jeux.ui_scale, color };
+    *vtx_wtr++ = (gl_text_Vtx) { min_x, max_y, pos.z, min_u, max_v, size*jeux.ui_scale, color };
+    *vtx_wtr++ = (gl_text_Vtx) { min_x, min_y, pos.z, min_u, min_v, size*jeux.ui_scale, color };
 
     *idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
     *idx_wtr++ = (gl_Tri) { start + 2, start + 3, start + 0 };
@@ -1878,18 +1904,28 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     jeux.camera = (f4x4) {0};
 
     {
-      float x = cosf(M_PI * -0.6f);
-      float y = sinf(M_PI * -0.6f);
-      jeux.camera_eye = (f3) { x, y, 1.8f };
+      float dist = 8.0f;
+
+      float x = cosf(M_PI * -0.6f) * dist;
+      float y = sinf(M_PI * -0.6f) * dist;
+      jeux.camera_eye = (f3) { x, y, 1.0f * dist };
     }
 
     {
       float ar = (float)(jeux.win_size_y) / (float)(jeux.win_size_x);
-      f4x4 projection = f4x4_ortho(
-         -7.0f     ,  7.0f     ,
-         -7.0f * ar,  7.0f * ar,
-        -20.0f     , 20.0f
-      );
+      f4x4 projection;
+      if (jeux.gl.camera.perspective)
+        projection = f4x4_perspective(
+          jeux.gl.camera.fov * M_PI / 180.0f,
+          ar,
+          0.1f, 30.0f
+        );
+      else
+        projection = f4x4_ortho(
+           -7.0f     ,  7.0f     ,
+           -7.0f * ar,  7.0f * ar,
+          -20.0f     , 20.0f
+        );
 
       f4x4 orbit = f4x4_target_to(
         jeux.camera_eye,
@@ -2051,7 +2087,10 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         f3 a = jeux_world_to_screen(f4x4_transform_f3(model, joint_pos(from)));
         f3 b = jeux_world_to_screen(f4x4_transform_f3(model, joint_pos(  to)));
 
-        float thickness = jeux.win_size_x * 0.005f;
+        float f = (jeux.gl.camera.perspective) ?
+          1.0f / tanf(jeux.gl.camera.fov * M_PI / 180.0f / 2) :
+          1.3f;
+        float thickness = jeux.win_size_x * 0.004f * f;
 
         Color color = { 1, 1, 1, 255 };
         gl_geo_line(a, b, thickness, color);
@@ -2492,7 +2531,7 @@ static bool ui_arrow_button(bool left) {
   return click;
 }
 
-static bool ui_picker(uint8_t *state, uint8_t option_count, Clay_String *labels) {
+static bool ui_picker(size_t *state, size_t option_count, Clay_String *labels) {
   Clay_TextElementConfig text_conf = { .fontSize = text_body, .textColor = ink };
 
   bool changed = false;
@@ -2737,16 +2776,16 @@ static void ui_window_content_options(void) {
 
       CLAY({ .layout.sizing = { .width = CLAY_SIZING_GROW(0) } }) {
         CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
-        ui_checkbox(&gui.options.perspective);
+        ui_checkbox(&jeux.gl.camera.perspective);
         CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
       }
 
     }
 
     /* FOV slider */
-    if (gui.options.perspective) CLAY(pair) {
+    if (jeux.gl.camera.perspective) CLAY(pair) {
       CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("FOV"), CLAY_TEXT_CONFIG(label)); }
-      CLAY(pair_inner) { ui_slider(CLAY_ID("FOV_SLIDER"), &gui.options.fov, 45, 170); }
+      CLAY(pair_inner) { ui_slider(CLAY_ID("FOV_SLIDER"), &jeux.gl.camera.fov, 35, 100); }
     }
 
     /* antialiasing approach dropdown */
@@ -2760,8 +2799,8 @@ static void ui_window_content_options(void) {
         [gl_AntiAliasingApproach_4XSSAA] = CLAY_STRING("4x SSAA"),
       };
       CLAY(pair_inner) {
-        bool changed = ui_picker(&gui.options.antialiasing, gl_AntiAliasingApproach_COUNT, labels);
-        if (changed) gl_set_antialiasing_approach(gui.options.antialiasing);
+        bool changed = ui_picker(&jeux.gl.pp.current_aa, gl_AntiAliasingApproach_COUNT, labels);
+        if (changed) gl_set_antialiasing_approach(jeux.gl.pp.current_aa);
       };
     }
 
@@ -2769,15 +2808,28 @@ static void ui_window_content_options(void) {
     CLAY(pair) {
       CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("UI SCALE"), CLAY_TEXT_CONFIG(label)); }
       CLAY(pair_inner) {
+
+        float ui_scale_min = 0.2f;
+        float ui_scale_max = 2.0f;
+
+        /* this is mostly for ZII */
+        if (gui.options.ui_scale_tmp < ui_scale_min)
+          gui.options.ui_scale_tmp = jeux.ui_scale;
+
         /* don't actually apply it until you let go because scaling something as you
          * move it around is WEIRD */
-        bool released = ui_slider(CLAY_ID("UI SCALE SLIDER"), &gui.options.ui_scale_tmp, 0.2, 2);
+        bool released = ui_slider(
+          CLAY_ID("UI SCALE SLIDER"),
+          &gui.options.ui_scale_tmp,
+          0.2,
+          2
+        );
 
         if (released) {
           f3 p = { gui.options.window.x, gui.options.window.y };
           p = f4x4_transform_f3(jeux.ui_transform, p);
 
-          gui.options.ui_scale = gui.options.ui_scale_tmp;
+          jeux.ui_scale = gui.options.ui_scale_tmp;
           gl_resize();
 
           p = f4x4_transform_f3(f4x4_invert(jeux.ui_transform), p);
