@@ -1585,6 +1585,9 @@ static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
       } break;
 
       case CLAY_RENDER_COMMAND_TYPE_BORDER: {
+        /* I have no idea if this is correct but it works */
+        ui_z += ui_z_bump;
+
         Clay_BorderRenderData *config = &rcmd->renderData.border;
         Color color = {
           config->color.r,
@@ -2109,13 +2112,18 @@ static struct {
     bool perspective;
     float fov;
     uint8_t antialiasing;
+    float ui_scale;
   } options;
 
   /* the element who owns the current mouse down action */
-  Clay_ElementId lmb_click_el;
-  bool lmb_click;
+  Clay_ElementId lmb_down_el;
+  bool lmb_click; /* left mouse button up this frame (what you want most of the time) */
+  bool lmb_down; /* left mouse button down this frame */
 } gui = {
-  .options.open = true
+  .options.open = true,
+  .options.antialiasing = gl_AntiAliasingApproach_4XSSAA,
+  .options.fov = 70.0f,
+  .options.ui_scale = 1.0f,
 };
 
 
@@ -2144,7 +2152,7 @@ static void ui_icon_f4x4(gl_Model model, size_t size, f4x4 mat) {
 static void ui_checkbox(bool *state) {
 
   CLAY({
-    .layout.sizing = { CLAY_SIZING_FIXED(14), CLAY_SIZING_FIXED(14) },
+    .layout.sizing = { CLAY_SIZING_FIXED(text_body), CLAY_SIZING_FIXED(text_body) },
   }) {
 
     Clay_ElementDeclaration floating = {
@@ -2164,13 +2172,13 @@ static void ui_checkbox(bool *state) {
       ui_icon(gl_Model_UiCheckBox, icon_size);
 
       floating.floating.offset.x =  4;
-      floating.floating.offset.y = -3;
-      if (*state) CLAY(floating) { ui_icon(gl_Model_UiCheck, icon_size); }
+      floating.floating.offset.y = -4;
+      if (*state) CLAY(floating) { ui_icon(gl_Model_UiCheck, icon_size + 4); }
     }
   };
 }
 
-static void ui_slider(Clay_ElementId id, float *state) {
+static void ui_slider(Clay_ElementId id, float *state, float min, float max) {
   Clay_ElementId handle_id = CLAY_IDI("SliderHandle", id.id);
 
   CLAY({
@@ -2197,28 +2205,29 @@ static void ui_slider(Clay_ElementId id, float *state) {
       ui_icon(gl_Model_UiSliderBody, bbox.width);
     }
 
+    float prog = inv_lerp(min, max, *state);
     CLAY({
       .floating.attachTo = CLAY_ATTACH_TO_PARENT,
       .floating.attachPoints.element = CLAY_ATTACH_POINT_CENTER_CENTER,
       .floating.attachPoints.parent = CLAY_ATTACH_POINT_LEFT_CENTER,
-      .floating.offset = { *state * bbox.width, 0 },
+      .floating.offset = { prog * bbox.width, 0 },
       .id = handle_id,
     }) {
       size_t icon_size = 15;
 
-      bool held = gui.lmb_click_el.id == handle_id.id;
+      bool held = gui.lmb_down_el.id == handle_id.id;
 
       if (Clay_Hovered() || held) {
         icon_size = 17;
 
-        if (gui.lmb_click) {
-          gui.lmb_click_el = handle_id;
+        if (gui.lmb_down) {
+          gui.lmb_down_el = handle_id;
         }
       }
 
       if (held) {
         float progress_px = jeux.mouse_screen_x - bbox.x;
-        *state = clamp(0, 1, progress_px / bbox.width);
+        *state = lerp(min, max, clamp(0, 1, progress_px / bbox.width));
       }
 
       ui_icon(gl_Model_UiSliderHandle, icon_size);
@@ -2272,10 +2281,247 @@ static void ui_picker(uint8_t *state, uint8_t option_count, Clay_String *labels)
   }
 }
 
+#define UI_IMAGE_FIT(image) (Clay_ImageElementConfig) { \
+  .sourceDimensions = { model_##image##_size_x, model_##image##_size_y }, \
+  .imageData = gl_Model_##image, \
+  .transform = f4x4_mul_f4x4( \
+    f4x4_scale3((f3) { 1/model_##image##_size_x, 1/model_##image##_size_y, 1.0f }), \
+    f4x4_move((f3) { -0.5f*(1 - model_##image##_size_x), -0.5f*(1 - model_##image##_size_y), 0.0f }) \
+  ) \
+}
+
+static void ui_wabisabi_window(
+  gl_Model emblem,
+  Clay_String window_title,
+  bool open,
+  void content_fn(void)
+) {
+#define WABI_DEBUG_BOUNDS 0
+
+  /* Wabisabi Window - Root */
+  CLAY({
+    .floating.attachTo = CLAY_ATTACH_TO_ROOT,
+    .floating.offset = { 142, 68 },
+    .layout.sizing.width  = CLAY_SIZING_FIXED(400),
+    .layout.sizing.height = CLAY_SIZING_FIT(100, 400),
+    #if WABI_DEBUG_BOUNDS
+    .border = { .color = { 255, 0, 0, 255 }, .width = { 2, 2, 2, 2 }},
+    #endif
+  }) {
+
+    /* Wabisabi Window - Background */
+    CLAY({ 
+      .layout.sizing.width  = CLAY_SIZING_GROW(0),
+      .layout.sizing.height = CLAY_SIZING_GROW(0),
+
+      // .layout.padding
+      .floating.offset = { 5, 3 },
+
+      .floating.zIndex = -1,
+      .floating.attachTo = CLAY_ATTACH_TO_PARENT,
+      .floating.attachPoints.element = CLAY_ATTACH_POINT_LEFT_TOP,
+      .floating.attachPoints.parent = CLAY_ATTACH_POINT_LEFT_TOP,
+      .floating.pointerCaptureMode = CLAY_POINTER_CAPTURE_MODE_PASSTHROUGH,
+
+      .image = UI_IMAGE_FIT(UiWindowBg),
+    });
+
+    /* Wabisabi Window - Corner Emblem */
+    size_t corner_size = 75;
+    CLAY({
+      .layout.sizing.width  = CLAY_SIZING_FIXED(corner_size),
+      .layout.sizing.height = CLAY_SIZING_FIXED(corner_size),
+
+      .floating.attachTo = CLAY_ATTACH_TO_PARENT,
+      .floating.attachPoints.element = CLAY_ATTACH_POINT_LEFT_TOP,
+      .floating.attachPoints.parent = CLAY_ATTACH_POINT_LEFT_TOP,
+      .floating.pointerCaptureMode = CLAY_POINTER_CAPTURE_MODE_PASSTHROUGH,
+      
+      .image.sourceDimensions = { 1, 1 },
+      .image.imageData = gl_Model_UiWindowCorner,
+      .image.transform = f4x4_scale(1),
+
+      .layout.childAlignment.x = CLAY_ALIGN_X_CENTER,
+      .layout.childAlignment.y = CLAY_ALIGN_Y_CENTER,
+
+      #if WABI_DEBUG_BOUNDS
+      .border = { .color = { 255, 0, 0, 255 }, .width = { 2, 2, 2, 2 }},
+      #endif
+    }) {
+      ui_icon(gl_Model_UiOptions, 50);
+    }
+
+    CLAY({
+      .layout.sizing.width  = CLAY_SIZING_GROW(100),
+      .layout.sizing.height = CLAY_SIZING_GROW(55),
+      .layout.padding.top = 7,
+      .layout.padding.left = 7,
+      .layout.padding.bottom = 2,
+      .layout.layoutDirection = CLAY_TOP_TO_BOTTOM,
+    }) {
+
+      /* Wabisabi Window - Top Bar */
+      CLAY({
+        .layout.sizing.width  = CLAY_SIZING_GROW(0),
+        .layout.sizing.height = CLAY_SIZING_FIXED(45),
+        .layout.childAlignment.x = CLAY_ALIGN_X_CENTER,
+        .layout.childAlignment.y = CLAY_ALIGN_Y_CENTER,
+      }) {
+
+        /* drawing the top bar itself */
+        CLAY({
+          .layout.sizing.width  = CLAY_SIZING_GROW(0),
+          .layout.sizing.height = CLAY_SIZING_GROW(0),
+          .layout.padding.left = 50,
+          .floating.attachTo = CLAY_ATTACH_TO_PARENT,
+          .floating.attachPoints.element = CLAY_ATTACH_POINT_LEFT_TOP,
+          .floating.attachPoints.parent = CLAY_ATTACH_POINT_LEFT_TOP,
+          .floating.pointerCaptureMode = CLAY_POINTER_CAPTURE_MODE_PASSTHROUGH,
+        }) {
+
+          CLAY({
+            .layout.sizing.width  = CLAY_SIZING_GROW(0),
+            .layout.sizing.height = CLAY_SIZING_GROW(0),
+
+            .image = UI_IMAGE_FIT(UiWindowTop),
+
+            #if WABI_DEBUG_BOUNDS
+            .border = { .color = { 255, 0, 0, 255 }, .width = { 2, 2, 2, 2 }},
+            #endif
+          }) {
+          }
+
+        }
+
+        CLAY({ .layout.padding.top = 8 }) {
+          CLAY_TEXT(CLAY_STRING("OPTIONS"), CLAY_TEXT_CONFIG({ .fontSize = 30, .textColor = ink }));
+        };
+
+        CLAY({
+          .floating.attachTo = CLAY_ATTACH_TO_PARENT,
+          .floating.attachPoints.element = CLAY_ATTACH_POINT_RIGHT_CENTER,
+          .floating.attachPoints.parent = CLAY_ATTACH_POINT_RIGHT_CENTER,
+          .floating.offset.x = -15,
+          .floating.offset.y =   5,
+        }) {
+          size_t icon_size = 20;
+          if (Clay_Hovered()) {
+            icon_size = 22;
+            if (gui.lmb_click) gui.options.open ^= 1;
+          }
+          ui_icon(gl_Model_UiEcksButton, icon_size);
+        };
+      }
+
+      /* Wabisabi Window - Content */
+      CLAY({
+        .layout.sizing.width  = CLAY_SIZING_GROW(0),
+        .layout.sizing.height = CLAY_SIZING_GROW(0),
+
+        .layout.padding.top = 16,
+        .layout.padding.bottom = 24,
+        .layout.padding.left = 24,
+        .layout.padding.right = 24,
+    
+        #if WABI_DEBUG_BOUNDS
+        .border = { .color = { 0, 255, 0, 255 }, .width = { 4, 4, 4, 4 }},
+        #endif
+      }) {
+
+        CLAY({
+          .layout.sizing.width  = CLAY_SIZING_GROW(0),
+          .layout.sizing.height = CLAY_SIZING_GROW(0),
+
+          .floating.attachTo = CLAY_ATTACH_TO_PARENT,
+          .floating.attachPoints.element = CLAY_ATTACH_POINT_LEFT_TOP,
+          .floating.attachPoints.parent = CLAY_ATTACH_POINT_LEFT_TOP,
+          .floating.pointerCaptureMode = CLAY_POINTER_CAPTURE_MODE_PASSTHROUGH,
+          .floating.offset = { 1, 2 },
+
+          .image = UI_IMAGE_FIT(UiWindowBorder),
+
+        }) {
+        }
+
+        content_fn();
+      }
+
+    }
+
+  }
+#undef WABI_DEBUG_BOUNDS
+}
+
+static void ui_window_content_options(void) {
+
+  CLAY({
+      .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM },
+      .layout.sizing.width = CLAY_SIZING_GROW(0)
+  }) {
+
+    Clay_ElementDeclaration pair = {
+      .layout.sizing.width = CLAY_SIZING_GROW(0),
+      .layout.padding.top = 20,
+      .layout.padding.bottom = 20,
+    };
+
+    Clay_ElementDeclaration pair_inner = {
+      .layout.sizing.width = CLAY_SIZING_GROW(0),
+      .layout.sizing.height = CLAY_SIZING_GROW(0),
+    };
+
+    Clay_TextElementConfig label = {
+      .fontSize = text_body,
+      .textColor = ink
+    };
+
+    /* perspective checkbox */
+    CLAY(pair) {
+
+      CLAY(pair_inner) {
+        CLAY_TEXT(CLAY_STRING("PERSPECTIVE"), CLAY_TEXT_CONFIG(label));
+      }
+
+      CLAY({ .layout.sizing = { .width = CLAY_SIZING_GROW(0) } }) {
+        CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
+        ui_checkbox(&gui.options.perspective);
+        CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
+      }
+
+    }
+
+    /* FOV slider */
+    if (gui.options.perspective) CLAY(pair) {
+      CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("FOV"), CLAY_TEXT_CONFIG(label)); }
+      CLAY(pair_inner) { ui_slider(CLAY_ID("FOV_SLIDER"), &gui.options.fov, 45, 170); }
+    }
+
+    /* antialiasing approach dropdown */
+    CLAY(pair) {
+      CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("ANTIALIASING"), CLAY_TEXT_CONFIG(label)); }; 
+      Clay_String labels[] = {
+        [gl_AntiAliasingApproach_None  ] = CLAY_STRING("NONE"),
+        [gl_AntiAliasingApproach_Linear] = CLAY_STRING("Linear"),
+        [gl_AntiAliasingApproach_FXAA  ] = CLAY_STRING("FXAA"),
+        [gl_AntiAliasingApproach_2XSSAA] = CLAY_STRING("2x SSAA"),
+        [gl_AntiAliasingApproach_4XSSAA] = CLAY_STRING("4x SSAA"),
+      };
+      CLAY(pair_inner) { ui_picker(&gui.options.antialiasing, gl_AntiAliasingApproach_COUNT, labels); }; 
+    }
+
+    /* ui scale slider */
+    CLAY(pair) {
+      CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("UI SCALE"), CLAY_TEXT_CONFIG(label)); }
+      CLAY(pair_inner) { ui_slider(CLAY_ID("UI SCALE SLIDER"), &gui.options.ui_scale, 0.2, 2); }
+    }
+  }
+}
+
 static void ui_main(void) {
   bool mouse_up = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_RELEASED_THIS_FRAME;
-  if (mouse_up) gui.lmb_click_el = (Clay_ElementId) { 0 };
-  gui.lmb_click = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_PRESSED_THIS_FRAME;
+  if (mouse_up) gui.lmb_down_el = (Clay_ElementId) { 0 };
+  gui.lmb_click = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_RELEASED_THIS_FRAME;
+  gui.lmb_down = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_PRESSED_THIS_FRAME;
 
   /* HUD */
   {
@@ -2310,142 +2556,10 @@ static void ui_main(void) {
     }
   }
 
-  /* options window */
-  if (gui.options.open) {
-    CLAY({
-      .id = CLAY_ID("OptionsWindow"),
-      .floating.attachTo = CLAY_ATTACH_TO_ROOT,
-      .layout.layoutDirection = CLAY_LEFT_TO_RIGHT,
-      .floating.offset = { 200, 150 },
-    }) {
-
-      Clay_ElementDeclaration floating = {
-        .floating.attachTo = CLAY_ATTACH_TO_PARENT,
-        .floating.attachPoints.element = CLAY_ATTACH_POINT_CENTER_CENTER,
-        .floating.attachPoints.parent = CLAY_ATTACH_POINT_CENTER_CENTER,
-        .floating.pointerCaptureMode = CLAY_POINTER_CAPTURE_MODE_PASSTHROUGH
-      };
-
-      Clay_ElementDeclaration bg = floating;
-      bg.floating.attachPoints.element = CLAY_ATTACH_POINT_LEFT_TOP;
-      bg.floating.offset.x = -53;
-      bg.floating.offset.y = -94;
-      CLAY(bg) {
-        float ar = (float)270 * (float)model_UiWindowBg_size_x / (float)model_UiWindowBg_size_y;
-        ui_icon(gl_Model_UiWindowBg, ar);
-      }
-
-      Clay_ElementDeclaration corner = floating;
-      corner.floating.offset.x = -20;
-      corner.floating.offset.y =   5;
-      CLAY(corner) {
-        float ar = (float)75 * (float)model_UiWindowCorner_size_x / (float)model_UiWindowCorner_size_y;
-        ui_icon(gl_Model_UiWindowCorner, ar);
-        CLAY(floating) { ui_icon(gl_Model_UiOptions, 50); }
-      }
-
-      Clay_ElementDeclaration top = floating;
-      top.floating.attachPoints.element = CLAY_ATTACH_POINT_LEFT_CENTER;
-      CLAY(top) {
-        float ar = (float)50 * (float)model_UiWindowTop_size_x / (float)model_UiWindowTop_size_y;
-        ui_icon(gl_Model_UiWindowTop, ar);
-
-        Clay_ElementDeclaration top_content = floating;
-        top_content.floating.offset.x = 26;
-        top_content.floating.offset.y = 2;
-        top_content.layout.sizing.width = CLAY_SIZING_FIXED(250);
-        CLAY(top_content) {
-          CLAY_TEXT(CLAY_STRING("OPTIONS"), CLAY_TEXT_CONFIG({ .fontSize = 30, .textColor = ink }));
-
-          CLAY({ .layout.sizing = { CLAY_SIZING_GROW(0) } });
-
-          CLAY({ .layout.padding.top = 4 }) {
-            size_t icon_size = 20;
-            if (Clay_Hovered()) {
-              icon_size = 22;
-              if (gui.lmb_click) gui.options.open ^= 1;
-            }
-            ui_icon(gl_Model_UiEcksButton, icon_size);
-          }; 
-        }
-      }
-
-      Clay_ElementDeclaration border = floating;
-      border.floating.attachPoints.element = CLAY_ATTACH_POINT_LEFT_TOP;
-      border.floating.offset.x = -50;
-      border.floating.offset.y = -66;
-      CLAY(border) {
-        float ar = (float)215 * (float)model_UiWindowBorder_size_x / (float)model_UiWindowBorder_size_y;
-        ui_icon(gl_Model_UiWindowBorder, ar);
-
-        CLAY({
-          .floating.attachTo = CLAY_ATTACH_TO_PARENT,
-          .floating.attachPoints.element = CLAY_ATTACH_POINT_LEFT_TOP,
-          .floating.attachPoints.parent = CLAY_ATTACH_POINT_LEFT_TOP,
-          .floating.offset.y = 80,
-          .floating.offset.x = 5,
-          .floating.pointerCaptureMode = CLAY_POINTER_CAPTURE_MODE_PASSTHROUGH,
-          .layout.sizing = { CLAY_SIZING_FIXED(382), CLAY_SIZING_FIXED(220) },
-          .layout.padding = { 24, 24, 24, 24 },
-          // .border = { .color = wood, .width = { 3, 3, 3, 3 }},
-        }) {
-
-          CLAY({ .layout.sizing.height = CLAY_SIZING_FIXED(30) });
-
-          CLAY({
-              .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM },
-              .layout.sizing.width = CLAY_SIZING_GROW(0)
-          }) {
-
-            Clay_ElementDeclaration pair = {
-              .layout.sizing.width = CLAY_SIZING_GROW(0),
-              .layout.padding.top = 20,
-              .layout.padding.bottom = 20,
-            };
-
-            Clay_ElementDeclaration pair_inner = {
-              .layout.sizing.width = CLAY_SIZING_GROW(0),
-              .layout.sizing.height = CLAY_SIZING_GROW(0),
-            };
-
-            Clay_TextElementConfig label = {
-              .fontSize = text_body,
-              .textColor = ink
-            };
-
-            CLAY(pair) {
-
-              CLAY(pair_inner) {
-                CLAY_TEXT(CLAY_STRING("PERSPECTIVE"), CLAY_TEXT_CONFIG(label));
-              }
-
-              CLAY({ .layout.sizing = { .width = CLAY_SIZING_GROW(0) } }) {
-                CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
-                ui_checkbox(&gui.options.perspective);
-                CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
-              }
-
-            }
-
-            CLAY(pair) {
-              CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("FOV"), CLAY_TEXT_CONFIG(label)); }
-              CLAY(pair_inner) { ui_slider(CLAY_ID("FOV_SLIDER"), &gui.options.fov); }
-            }
-
-            CLAY(pair) {
-              CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("ANTIALIASING"), CLAY_TEXT_CONFIG(label)); }; 
-              Clay_String labels[] = {
-                [gl_AntiAliasingApproach_None  ] = CLAY_STRING("NONE"),
-                [gl_AntiAliasingApproach_Linear] = CLAY_STRING("Linear"),
-                [gl_AntiAliasingApproach_FXAA  ] = CLAY_STRING("FXAA"),
-                [gl_AntiAliasingApproach_2XSSAA] = CLAY_STRING("2x SSAA"),
-                [gl_AntiAliasingApproach_4XSSAA] = CLAY_STRING("4x SSAA"),
-              };
-              CLAY(pair_inner) { ui_picker(&gui.options.antialiasing, gl_AntiAliasingApproach_COUNT, labels); }; 
-            }
-          }
-        };
-      }
-    }
-  }
+  ui_wabisabi_window(
+    gl_Model_UiOptions,
+    CLAY_STRING("OPTIONS"),
+    gui.options.open,
+    &ui_window_content_options
+  );
 }
