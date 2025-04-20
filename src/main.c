@@ -340,18 +340,68 @@ typedef struct {
   /* just a model matrix, (view and projection get applied for you) */
   f4x4 matrix;
   /* doesn't premultiply in camera matrix for you */
-  bool two_dee;
+  bool two_dee_ui;
 } gl_ModelDraw;
+typedef struct {
+  gl_geo_Vtx vtx[9999];
+  gl_geo_Vtx *vtx_wtr;
+
+  gl_Tri idx[9999];
+  gl_Tri *idx_wtr;
+
+  GLuint buf_vtx;
+  GLuint buf_idx;
+} gl_DynGeo;
+
+typedef enum {
+  gl_AntiAliasingApproach_None,
+  gl_AntiAliasingApproach_Linear,
+  gl_AntiAliasingApproach_FXAA,
+  gl_AntiAliasingApproach_2XSSAA,
+  gl_AntiAliasingApproach_4XSSAA,
+  gl_AntiAliasingApproach_COUNT
+} gl_AntiAliasingApproach;
+
+typedef struct {
+  bool open;
+  float x, y;
+  /* where you were when THE MOUSE WENT DOWN!!!! */
+  float lmb_down_x, lmb_down_y;
+} ui_WabisabiWindow;
 
 static struct {
   struct {
     SDL_Window    *window;
     SDL_GLContext  gl_ctx;
+    SDL_Cursor    *cursor_move, *cursor_default, *cursor_doable, *cursor_sideways;
+    /* dis one special, it's what I set the cursor to at the end of
+     * the frame because I'm paranoid about calling SDL_SetCursor
+     * more than once a frame */
+    SDL_Cursor *cursor_next;
   } sdl;
+
+  /* gui */
+  struct {
+    struct {
+      ui_WabisabiWindow window;
+      bool perspective;
+      float fov;
+      uint8_t antialiasing;
+      float ui_scale, ui_scale_tmp;
+    } options;
+
+    /* the element who owns the current mouse down action */
+    Clay_ElementId lmb_down_el;
+    bool lmb_click; /* left mouse button up this frame (what you want most of the time) */
+    bool lmb_down; /* left mouse button down this frame */
+  } gui;
+
 
   /* input */
   size_t win_size_x, win_size_y;
   float mouse_screen_x, mouse_screen_y, mouse_lmb_down;
+  /* this is different than mouse_screen_x because dynamic ui scale; screen x/y is in raw screen coordinates */
+  float mouse_ui_x, mouse_ui_y, mouse_ui_lmb_down_x, mouse_ui_lmb_down_y;
   /* mouse projected onto the ground plane at z=0
    * used for aiming weapons, picking up/dropping things from inventory etc. */
   f3 mouse_ground;
@@ -361,28 +411,24 @@ static struct {
   double elapsed;
 
   /* camera goes from 3D world -> 2D in -1 .. 1
+   * useful for ... knowing where to put a 3D thing on the screen
    *
    * screen goes from 2D in 0 ... window_size_x/window_size_y to -1 ... 1,
    * useful for laying things out in pixels, mouse picking etc.
    */
-  f4x4 camera, screen;
+  f4x4 camera, screen, ui_transform;
   f3 camera_eye;
 
+  /* renderer ("gl") */
   struct {
     struct {
-      gl_geo_Vtx vtx[9999];
-      gl_geo_Vtx *vtx_wtr;
-
-      gl_Tri idx[9999];
-      gl_Tri *idx_wtr;
-
-      GLuint buf_vtx;
-      GLuint buf_idx;
+      gl_DynGeo dyn_geo_ui, dyn_geo_world;
+      gl_DynGeo *dyn; /* the active gl_DynGeo, probably one of the above */
 
       /* Dynamic, per-frame geometry like lines and such are simply written
        * directly into their buffers and subsequently rendered in a single call.
        *
-       * Static geometry (models made in Blender), rather than being drawn directly,
+       * Static geometry (models made in Blender/SVGs), rather than being drawn directly,
        * are requested to be drawn through the model_draws queue. This allows us to
        * handle instancing, sorting etc. in a pass immediately before rendering. */
       gl_ModelDraw  model_draws[999];
@@ -459,6 +505,16 @@ static struct {
 #else
     .fb_scale = 1.0f,
 #endif
+  },
+
+  .gui = {
+    .options.window.open = true,
+    .options.window.x = 142,
+    .options.window.y = 68,
+    .options.antialiasing = gl_AntiAliasingApproach_4XSSAA,
+    .options.fov = 70.0f,
+    .options.ui_scale = 0.5f,
+    .options.ui_scale_tmp = 0.5f,
   }
 };
 
@@ -471,6 +527,11 @@ static f3 jeux_world_to_screen(f3 p) {
 static f3 jeux_screen_to_world(f3 p) {
   p = f4x4_transform_f3(jeux.screen, p);
   p = f4x4_transform_f3(f4x4_invert(jeux.camera), p);
+  return p;
+}
+static f3 jeux_screen_to_ui(f3 p) {
+  p = f4x4_transform_f3(jeux.screen, p);
+  p = f4x4_transform_f3(f4x4_invert(jeux.ui_transform), p);
   return p;
 }
 
@@ -532,25 +593,41 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
       SDL_Log("GL init failed: %s\n", SDL_GetError());
       return 1;
     }
+
+    /* TODO: do custom assets for these https://wiki.libsdl.org/SDL3/SDL_CreateColorCursor */
+    jeux.sdl.cursor_move     = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_MOVE);
+    jeux.sdl.cursor_default  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
+    jeux.sdl.cursor_doable   = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER);
+    jeux.sdl.cursor_sideways = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
+
+    /* TODO: SDL_SYSTEM_CURSOR_NOT_ALLOWED exists, could be useful sometimes */;
   }
 
   jeux.ts_last_frame = SDL_GetPerformanceCounter();
   jeux.ts_first = SDL_GetPerformanceCounter();
 
-  /* gui init */
   {
+    SDL_AppResult gl_init_res = gl_init();
+    if (gl_init_res != SDL_APP_CONTINUE) return gl_init_res;
+  }
+
+  /* gui init - need to init gl first so that the
+   * ui matrix thingy is initialized */
+  {
+    f3 ui = jeux_screen_to_ui((f3) { jeux.win_size_x, jeux.win_size_y, 0 });
+
     Clay_Initialize(
       (Clay_Arena) {
         .memory = SDL_malloc(Clay_MinMemorySize()),
         .capacity = Clay_MinMemorySize()
       },
-      (Clay_Dimensions) { jeux.win_size_x, jeux.win_size_y },
+      (Clay_Dimensions) { ui.x, ui.y },
       (Clay_ErrorHandler) { gui_handle_errors }
     );
     Clay_SetMeasureTextFunction(gui_measure_text, NULL);
   }
 
-  return gl_init();
+  return SDL_APP_CONTINUE;
 }
 
 static void gl_resize(void);
@@ -564,12 +641,13 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
       jeux.win_size_y = event->window.data2;
       gl_resize();
 
-      Clay_SetLayoutDimensions(
-        (Clay_Dimensions) {
-          (float) event->window.data1,
-          (float) event->window.data2
-        }
-      );
+      {
+        float x = (float) event->window.data1;
+        float y = (float) event->window.data2;
+        f3 ui = jeux_screen_to_ui((f3) { x, y, 0 });
+
+        Clay_SetLayoutDimensions((Clay_Dimensions) { ui.x, ui.y });
+      }
     }
   }
 
@@ -580,12 +658,18 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     }
     if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
       jeux.mouse_lmb_down = event->button.button == SDL_BUTTON_LEFT;
-      // jeux.mouse_lmb_down_x = event->button.x;
-      // jeux.mouse_lmb_down_y = event->button.y;
+
+      f3 ui = jeux_screen_to_ui((f3) { event->button.x, event->button.y, 0 });
+      jeux.mouse_ui_lmb_down_x = ui.x;
+      jeux.mouse_ui_lmb_down_y = ui.y;
     }
     if (event->type == SDL_EVENT_MOUSE_MOTION) {
       jeux.mouse_screen_x = event->motion.x;
       jeux.mouse_screen_y = event->motion.y;
+
+      f3 ui = jeux_screen_to_ui((f3) { event->motion.x, event->motion.y, 0 });
+      jeux.mouse_ui_x = ui.x;
+      jeux.mouse_ui_y = ui.y;
     }
     if (event->type == SDL_EVENT_MOUSE_WHEEL) {
       Clay_UpdateScrollContainers(true, (Clay_Vector2) { event->wheel.x, event->wheel.y }, 0.01f);
@@ -697,6 +781,10 @@ static SDL_AppResult gl_init(void) {
           "\n"
           "void main() {\n"
           "  float dist = texture2D(u_tex, v_uv).r;\n"
+
+          /* fairly certain the colors coming out of that texture are in SRGB */
+          "  dist = pow(abs(dist), 2.2);\n"
+
           "  float alpha = smoothstep(u_buffer - v_gamma, u_buffer + v_gamma, dist);\n"
           "  gl_FragColor = v_color * v_color.a * alpha;\n"
           "}\n"
@@ -787,21 +875,21 @@ static SDL_AppResult gl_init(void) {
             "float lumaSW = dot(rgbSW, luma);\n"
             "float lumaSE = dot(rgbSE, luma);\n"
             "float lumaM  = dot( rgbM, luma);\n"
-          
+
             "float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));\n"
             "float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));\n"
-          
+
             "vec2 dir;\n"
             "dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));\n"
             "dir.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));\n"
-          
+
             "float dirReduce = max(\n"
             "  (lumaNW + lumaNE + lumaSW + lumaSE) * (0.25 * FXAA_REDUCE_MUL),\n"
             "  FXAA_REDUCE_MIN\n"
             ");\n"
 
             "float rcpDirMin = 1.0/(min(abs(dir.x), abs(dir.y)) + dirReduce);\n"
-          
+
             "dir = min(\n"
             "  vec2(FXAA_SPAN_MAX,  FXAA_SPAN_MAX),\n"
             "  max(vec2(-FXAA_SPAN_MAX, -FXAA_SPAN_MAX), dir * rcpDirMin)\n"
@@ -894,14 +982,29 @@ static SDL_AppResult gl_init(void) {
 
   /* dynamic geometry buffer */
   {
-    {
-      glGenBuffers(1, &jeux.gl.geo.buf_vtx);
-      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.buf_vtx);
-      glBufferData(GL_ARRAY_BUFFER, sizeof(jeux.gl.geo.vtx), NULL, GL_DYNAMIC_DRAW);
 
-      glGenBuffers(1, &jeux.gl.geo.buf_idx);
-      glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.buf_idx);
-      glBufferData(GL_ARRAY_BUFFER, sizeof(jeux.gl.geo.idx), NULL, GL_DYNAMIC_DRAW);
+    jeux.gl.geo.dyn = &jeux.gl.geo.dyn_geo_world;
+
+    {
+      gl_DynGeo *dyn = &jeux.gl.geo.dyn_geo_world;
+      glGenBuffers(1, &dyn->buf_vtx);
+      glBindBuffer(GL_ARRAY_BUFFER, dyn->buf_vtx);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(dyn->vtx), NULL, GL_DYNAMIC_DRAW);
+
+      glGenBuffers(1, &dyn->buf_idx);
+      glBindBuffer(GL_ARRAY_BUFFER, dyn->buf_idx);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(dyn->idx), NULL, GL_DYNAMIC_DRAW);
+    }
+
+    {
+      gl_DynGeo *dyn = &jeux.gl.geo.dyn_geo_ui;
+      glGenBuffers(1, &dyn->buf_vtx);
+      glBindBuffer(GL_ARRAY_BUFFER, dyn->buf_vtx);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(dyn->vtx), NULL, GL_DYNAMIC_DRAW);
+
+      glGenBuffers(1, &dyn->buf_idx);
+      glBindBuffer(GL_ARRAY_BUFFER, dyn->buf_idx);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(dyn->idx), NULL, GL_DYNAMIC_DRAW);
     }
 
     for (size_t i = 0; i < gl_Model_COUNT; i++) {
@@ -1096,10 +1199,19 @@ static SDL_AppResult gl_init(void) {
 static void gl_resize(void) {
   /* Flip the y! */
   jeux.screen = f4x4_ortho(
-     0.0f,             jeux.win_size_x,
-     jeux.win_size_y,  0.0f,
-    -1.0f,             1.0f
+     0.0f,            jeux.win_size_x,
+     jeux.win_size_y, 0.0f,
+    -1.0f,            1.0f
   );
+
+  {
+    float scale = 1.0f / jeux.gui.options.ui_scale;
+    jeux.ui_transform = f4x4_ortho(
+       0.0f,                  jeux.win_size_x*scale,
+       jeux.win_size_y*scale, 0.0f,
+      -1.0f,                  1.0f
+    );
+  }
 
   jeux.gl.pp.phys_win_size_x = jeux.win_size_x*SDL_GetWindowPixelDensity(jeux.sdl.window);
   jeux.gl.pp.phys_win_size_y = jeux.win_size_y*SDL_GetWindowPixelDensity(jeux.sdl.window);
@@ -1291,10 +1403,10 @@ static void gl_text_draw_ex(
       }
     }
 
-    *vtx_wtr++ = (gl_text_Vtx) { max_x, min_y, pos.z, max_u, min_v, size, color };
-    *vtx_wtr++ = (gl_text_Vtx) { max_x, max_y, pos.z, max_u, max_v, size, color };
-    *vtx_wtr++ = (gl_text_Vtx) { min_x, max_y, pos.z, min_u, max_v, size, color };
-    *vtx_wtr++ = (gl_text_Vtx) { min_x, min_y, pos.z, min_u, min_v, size, color };
+    *vtx_wtr++ = (gl_text_Vtx) { max_x, min_y, pos.z, max_u, min_v, size*jeux.gui.options.ui_scale, color };
+    *vtx_wtr++ = (gl_text_Vtx) { max_x, max_y, pos.z, max_u, max_v, size*jeux.gui.options.ui_scale, color };
+    *vtx_wtr++ = (gl_text_Vtx) { min_x, max_y, pos.z, min_u, max_v, size*jeux.gui.options.ui_scale, color };
+    *vtx_wtr++ = (gl_text_Vtx) { min_x, min_y, pos.z, min_u, min_v, size*jeux.gui.options.ui_scale, color };
 
     *idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
     *idx_wtr++ = (gl_Tri) { start + 2, start + 3, start + 0 };
@@ -1307,8 +1419,10 @@ static void gl_text_draw_ex(
 }
 
 static void gl_geo_reset(void) {
-  jeux.gl.geo.vtx_wtr = jeux.gl.geo.vtx;
-  jeux.gl.geo.idx_wtr = jeux.gl.geo.idx;
+  jeux.gl.geo.dyn_geo_ui   .vtx_wtr = jeux.gl.geo.dyn_geo_ui   .vtx;
+  jeux.gl.geo.dyn_geo_ui   .idx_wtr = jeux.gl.geo.dyn_geo_ui   .idx;
+  jeux.gl.geo.dyn_geo_world.vtx_wtr = jeux.gl.geo.dyn_geo_world.vtx;
+  jeux.gl.geo.dyn_geo_world.idx_wtr = jeux.gl.geo.dyn_geo_world.idx;
   jeux.gl.geo.model_draws_wtr = jeux.gl.geo.model_draws;
 }
 
@@ -1320,18 +1434,18 @@ static void gl_geo_arc(
   float radius,
   Color color
 ) {
-  uint16_t start = jeux.gl.geo.vtx_wtr - jeux.gl.geo.vtx;
+  uint16_t start = jeux.gl.geo.dyn->vtx_wtr - jeux.gl.geo.dyn->vtx;
 
   /* center of the triangle fan */
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { .pos = center, .color = color };
+  *jeux.gl.geo.dyn->vtx_wtr++ = (gl_geo_Vtx) { .pos = center, .color = color };
 
   for (int i = 0; i <= detail; i++) {
     float t = lerp(radians_from, radians_to, (float)i / (float)detail);
     float x = center.x + cosf(t) * radius;
     float y = center.y + sinf(t) * radius;
-    *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { x, y, center.z }, color };
+    *jeux.gl.geo.dyn->vtx_wtr++ = (gl_geo_Vtx) { { x, y, center.z }, color };
 
-    if (i > 0) *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start, start + i, start + i + 1 };
+    if (i > 0) *jeux.gl.geo.dyn->idx_wtr++ = (gl_Tri) { start, start + i, start + i + 1 };
   }
 }
 
@@ -1355,27 +1469,27 @@ static void gl_geo_line(f3 a, f3 b, float thickness, Color color) {
   float nx = -dy / dlen * thickness*0.5;
   float ny =  dx / dlen * thickness*0.5;
 
-  uint16_t start = jeux.gl.geo.vtx_wtr - jeux.gl.geo.vtx;
+  uint16_t start = jeux.gl.geo.dyn->vtx_wtr - jeux.gl.geo.dyn->vtx;
 
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { a.x + nx, a.y + ny, a.z }, color };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { a.x - nx, a.y - ny, a.z }, color };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { b.x + nx, b.y + ny, b.z }, color };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { b.x - nx, b.y - ny, b.z }, color };
+  *jeux.gl.geo.dyn->vtx_wtr++ = (gl_geo_Vtx) { { a.x + nx, a.y + ny, a.z }, color };
+  *jeux.gl.geo.dyn->vtx_wtr++ = (gl_geo_Vtx) { { a.x - nx, a.y - ny, a.z }, color };
+  *jeux.gl.geo.dyn->vtx_wtr++ = (gl_geo_Vtx) { { b.x + nx, b.y + ny, b.z }, color };
+  *jeux.gl.geo.dyn->vtx_wtr++ = (gl_geo_Vtx) { { b.x - nx, b.y - ny, b.z }, color };
 
-  *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
-  *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start + 2, start + 1, start + 3 };
+  *jeux.gl.geo.dyn->idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
+  *jeux.gl.geo.dyn->idx_wtr++ = (gl_Tri) { start + 2, start + 1, start + 3 };
 }
 
 static void gl_geo_box(f3 min, f3 max, Color color) {
-  uint16_t start = jeux.gl.geo.vtx_wtr - jeux.gl.geo.vtx;
+  uint16_t start = jeux.gl.geo.dyn->vtx_wtr - jeux.gl.geo.dyn->vtx;
 
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { min.x, min.y, min.z }, color };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { min.x, max.y, min.z }, color };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { max.x, max.y, min.z }, color };
-  *jeux.gl.geo.vtx_wtr++ = (gl_geo_Vtx) { { max.x, min.y, min.z }, color };
+  *jeux.gl.geo.dyn->vtx_wtr++ = (gl_geo_Vtx) { { min.x, min.y, min.z }, color };
+  *jeux.gl.geo.dyn->vtx_wtr++ = (gl_geo_Vtx) { { min.x, max.y, min.z }, color };
+  *jeux.gl.geo.dyn->vtx_wtr++ = (gl_geo_Vtx) { { max.x, max.y, min.z }, color };
+  *jeux.gl.geo.dyn->vtx_wtr++ = (gl_geo_Vtx) { { max.x, min.y, min.z }, color };
 
-  *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
-  *jeux.gl.geo.idx_wtr++ = (gl_Tri) { start + 3, start + 2, start + 0 };
+  *jeux.gl.geo.dyn->idx_wtr++ = (gl_Tri) { start + 0, start + 1, start + 2 };
+  *jeux.gl.geo.dyn->idx_wtr++ = (gl_Tri) { start + 3, start + 2, start + 0 };
 }
 
 static void gl_geo_box2_outline(f3 min, f3 max, float thickness, Color color) {
@@ -1490,8 +1604,10 @@ static void gl_geo_box3_outline(f3 center, f3 scale, float thickness, Color colo
  * WARNING: This Clay renderer has "character":
  *
  *  [x] We only take into account cornerRadius.topLeft. Other corners? Fuck 'em.
+ *      (whatever radius is supplied for the other corners, cornerRadius.topLeft
+ *      is used instead; you can make rounded rectangles, but not tabs)
  *
- *  [x] 2 draw calls, one for all UI, one afterwards for text.
+ *  [x] 2 + n draw calls, one for dynamic shapes, n for assets, one afterwards for text.
  *      (Text has its own AA, so it happens after postprocessing.)
  *
  *  [x] We reproject UVs instead of using scissor. (this allows just 2 draw calls)
@@ -1500,9 +1616,14 @@ static void gl_geo_box3_outline(f3 center, f3 scale, float thickness, Color colo
  *      as things in the 3D scene, so we can easily draw the character in your inventory.
  *
  *  [x] UI is at z=0.99, draw over that to draw over the UI.
-
+ *
  *  [x] clay.h's "imageData" has been changed from "void *" to a "size_t",
- *      which is interpreted as a gl_Model.
+ *      which is interpreted as a gl_Model. (image commands actually draw 3D
+ *      geometry, and all the 2D UI assets are secretly 3D models)
+ *
+ *  [x] Alongside clay.h's "imageData," a "transform" f4x4 has been added,
+ *      which is used on the gl_Model how you'd think. (yes, I made the external
+ *      clay.h dependent on our internal f4x4 type - who's going to stop me!?)
  *
  *  [x] Even though our text is arbitrarily resizable, Clay's fontSize is a uint16_t, so
  *      the text ends up getting truncated. This is trivial to tweak in clay.h, but the
@@ -1513,6 +1634,9 @@ static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
   Box2 clip = BOX2_UNCONSTRAINED;
   float ui_z = 0.99f;
   float ui_z_bump = 0.00001f;
+
+  /* we want to write to the ui geo buf (scaled by ui scale) in this function */
+  jeux.gl.geo.dyn = &jeux.gl.geo.dyn_geo_ui;
 
   for (size_t i = 0; i < rcommands->length; i++) {
     Clay_RenderCommand *rcmd = Clay_RenderCommandArray_Get(rcommands, i);
@@ -1669,7 +1793,7 @@ static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
         *jeux.gl.geo.model_draws_wtr++ = (gl_ModelDraw) {
           .model = rcmd->renderData.image.imageData,
           .matrix = mvp,
-          .two_dee = true,
+          .two_dee_ui = true,
         };
       } break;
 
@@ -1677,6 +1801,9 @@ static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
         SDL_Log("Unknown render command type: %d", rcmd->commandType);
     }
   }
+
+  /* go back to writing to the world buf */
+  jeux.gl.geo.dyn = &jeux.gl.geo.dyn_geo_world;
 }
 
 static void ui_main(void);
@@ -1689,7 +1816,14 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     jeux.elapsed = (double)(ts_now - jeux.ts_first) / (double)SDL_GetPerformanceFrequency();
   }
-  
+
+  {
+    /* this gives us effectively an immediate mode API
+     * for cursor setting; if you don't want the cursor
+     * to be the default, set it that way every frame. */
+    jeux.sdl.cursor_next = jeux.sdl.cursor_default;
+  }
+
   /* construct the jeux.camera for this frame */
   {
     /* camera */
@@ -1746,7 +1880,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
       {
         Clay_SetPointerState(
-          (Clay_Vector2) { jeux.mouse_screen_x, jeux.mouse_screen_y },
+          (Clay_Vector2) { jeux.mouse_ui_x, jeux.mouse_ui_y },
           jeux.mouse_lmb_down
         );
 
@@ -1934,30 +2068,35 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         glUseProgram(jeux.gl.geo.shader);
 
         /* draw dynamic, generated per-frame geo content */
-        {
+        gl_DynGeo *dyn_geos[] = { &jeux.gl.geo.dyn_geo_ui, &jeux.gl.geo.dyn_geo_world };
+        f4x4 *dyn_geos_mvps[] = { &jeux.ui_transform     , &jeux.screen               };
+        for (int i = 0; i < jx_COUNT(dyn_geos); i++) {
+          gl_DynGeo *dyn = dyn_geos[i];
+          f4x4 *mvp = dyn_geos_mvps[i];
+
           /* upload data into dynamic buffers */
           {
-            gl_geo_Vtx *vtx = jeux.gl.geo.vtx;
-            gl_Tri     *idx = jeux.gl.geo.idx;
+            gl_geo_Vtx *vtx = dyn->vtx;
+            gl_Tri     *idx = dyn->idx;
 
             {
-              glBindBuffer(GL_ARRAY_BUFFER, jeux.gl.geo.buf_vtx);
-              size_t len = jeux.gl.geo.vtx_wtr - vtx;
+              glBindBuffer(GL_ARRAY_BUFFER, dyn->buf_vtx);
+              size_t len = dyn->vtx_wtr - vtx;
               glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vtx[0]) * len, vtx);
             }
 
             {
-              glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, jeux.gl.geo.buf_idx);
-              size_t len = jeux.gl.geo.idx_wtr - idx;
+              glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, dyn->buf_idx);
+              size_t len = dyn->idx_wtr - idx;
               glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, sizeof(idx[0]) * len, idx);
             }
           }
 
           GEO_VTX_BIND_LAYOUT;
 
-          glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, jeux.screen.floats);
+          glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, mvp->floats);
 
-          glDrawElements(GL_TRIANGLES, 3*(jeux.gl.geo.idx_wtr - jeux.gl.geo.idx), GL_UNSIGNED_SHORT, 0);
+          glDrawElements(GL_TRIANGLES, 3*(dyn->idx_wtr - dyn->idx), GL_UNSIGNED_SHORT, 0);
         }
 
         /* draw static geo content */
@@ -1971,8 +2110,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
           GEO_VTX_BIND_LAYOUT;
 
-          if (draw->two_dee) {
-            f4x4 mvp = jeux.screen;
+          if (draw->two_dee_ui) {
+            f4x4 mvp = jeux.ui_transform;
             mvp = f4x4_mul_f4x4(mvp, draw->matrix);
             glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, mvp.floats);
           } else {
@@ -2065,8 +2204,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
       glBindTexture(GL_TEXTURE_2D, jeux.gl.text.tex);
       glUniform2f(       jeux.gl.text.shader_u_tex_size, font_TEX_SIZE_X, font_TEX_SIZE_Y);
-      glUniformMatrix4fv(jeux.gl.text.shader_u_mvp, 1, 0, jeux.screen.floats);
-      glUniform1f(       jeux.gl.text.shader_u_buffer, 0.725);
+      glUniformMatrix4fv(jeux.gl.text.shader_u_mvp, 1, 0, jeux.ui_transform.floats);
+      glUniform1f(       jeux.gl.text.shader_u_buffer, 0.5);
 
       /* set up premultiplied alpha */
       glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
@@ -2085,6 +2224,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
   }
 
   SDL_GL_SwapWindow(jeux.sdl.window);
+
+  SDL_SetCursor(jeux.sdl.cursor_next);
   return SDL_APP_CONTINUE;
 }
 
@@ -2098,35 +2239,57 @@ Clay_Color ink         = {   0,   0,   0, 255 };
 uint16_t text_body = 24;
 uint16_t text_title = 24;
 
-typedef enum {
-  gl_AntiAliasingApproach_None,
-  gl_AntiAliasingApproach_Linear,
-  gl_AntiAliasingApproach_FXAA,
-  gl_AntiAliasingApproach_2XSSAA,
-  gl_AntiAliasingApproach_4XSSAA,
-  gl_AntiAliasingApproach_COUNT
-} gl_AntiAliasingApproach;
-static struct {
-  struct {
-    bool open;
-    bool perspective;
-    float fov;
-    uint8_t antialiasing;
-    float ui_scale;
-  } options;
+/* massive hack. praying for forgiveness */
+#define gui (jeux.gui)
 
-  /* the element who owns the current mouse down action */
-  Clay_ElementId lmb_down_el;
-  bool lmb_click; /* left mouse button up this frame (what you want most of the time) */
-  bool lmb_down; /* left mouse button down this frame */
-} gui = {
-  .options.open = true,
-  .options.antialiasing = gl_AntiAliasingApproach_4XSSAA,
-  .options.fov = 70.0f,
-  .options.ui_scale = 1.0f,
-};
+/* If you give the SVG Cooker an SVG like this
+ *
+ *   (0, 0)
+ *      +==============+
+ *      |   . .....    |
+ *      |  . .         |
+ *      +==============+  (230, 50)
+ *
+ * It normalizes the coordinates, like this
+ *
+ *   (0, 0)
+ *      +==============+
+ *      |              |
+ *      +==============+
+ *      |   . .....    |
+ *      |  . .         |
+ *      +==============+
+ *      |              |
+ *      +==============+  (1, 1)
+ *
+ * In doing so, instead of smushing into a box and breaking the aspect
+ * ratio, it adds some space to the sides, preserving the aspect ratio
+ * of the image.
+ *
+ * Most of the time, this is what you want - now you can just draw
+ * the image, and you don't have to wory about supplying unique UVs
+ * for it.
+ *
+ * But sometimes, we want to  take advantage of the fact that this
+ * asset is actually a vector graphic, and we can scale it arbitrarily.
+ *
+ * When that's the case, it would be nice to know what portion of the
+ * image actually gets used -- where the smaller rectangle is in that
+ * drawing - so you can effectively "undo" the shrink-to-fit operation.
+ *
+ * What this macro does is supply a Clay_ImageElementConfig that undoes
+ * the automatic aspect ratio correction; using this, you can warp your
+ * images, so keep that in mind. */
+#define UI_IMAGE_FIT(image) (Clay_ImageElementConfig) { \
+  .sourceDimensions = { model_##image##_size_x, model_##image##_size_y }, \
+  .imageData = gl_Model_##image, \
+  .transform = f4x4_mul_f4x4( \
+    f4x4_scale3((f3) { 1/model_##image##_size_x, 1/model_##image##_size_y, 1.0f }), \
+    f4x4_move((f3) { -0.5f*(1 - model_##image##_size_x), -0.5f*(1 - model_##image##_size_y), 0.0f }) \
+  ) \
+}
 
-
+/* MARK: START of "DUMB UI COMPONENTS" */
 static void ui_icon(gl_Model model, size_t size) {
   CLAY({
     .layout.sizing = { CLAY_SIZING_FIXED(size), CLAY_SIZING_FIXED(size) },
@@ -2165,6 +2328,7 @@ static void ui_checkbox(bool *state) {
     CLAY(floating) {
       size_t icon_size = 18;
       if (Clay_Hovered()) {
+        jeux.sdl.cursor_next = jeux.sdl.cursor_doable;
         icon_size = 20;
         if (gui.lmb_click) *state ^= 1;
       }
@@ -2178,8 +2342,11 @@ static void ui_checkbox(bool *state) {
   };
 }
 
-static void ui_slider(Clay_ElementId id, float *state, float min, float max) {
+/* returns true if released this frame */
+static bool ui_slider(Clay_ElementId id, float *state, float min, float max) {
   Clay_ElementId handle_id = CLAY_IDI("SliderHandle", id.id);
+
+  bool released = false;
 
   CLAY({
     .layout.sizing.width  = CLAY_SIZING_GROW(0),
@@ -2218,6 +2385,7 @@ static void ui_slider(Clay_ElementId id, float *state, float min, float max) {
       bool held = gui.lmb_down_el.id == handle_id.id;
 
       if (Clay_Hovered() || held) {
+        jeux.sdl.cursor_next = jeux.sdl.cursor_sideways;
         icon_size = 17;
 
         if (gui.lmb_down) {
@@ -2226,13 +2394,20 @@ static void ui_slider(Clay_ElementId id, float *state, float min, float max) {
       }
 
       if (held) {
-        float progress_px = jeux.mouse_screen_x - bbox.x;
+        float progress_px = jeux.mouse_ui_x - bbox.x;
         *state = lerp(min, max, clamp(0, 1, progress_px / bbox.width));
+      }
+
+      /* click is actually release - may be a stupid naming scheme on my part */
+      if (held && gui.lmb_click) {
+        released = true;
       }
 
       ui_icon(gl_Model_UiSliderHandle, icon_size);
     }
   }
+
+  return released;
 }
 
 static bool ui_arrow_button(bool left) {
@@ -2251,6 +2426,8 @@ static bool ui_arrow_button(bool left) {
       .floating.attachPoints.parent = CLAY_ATTACH_POINT_CENTER_CENTER,
     }) {
       if (Clay_Hovered()) {
+        jeux.sdl.cursor_next = jeux.sdl.cursor_doable;
+
         icon_size = 17;
         if (gui.lmb_click) click = true;
       }
@@ -2281,27 +2458,26 @@ static void ui_picker(uint8_t *state, uint8_t option_count, Clay_String *labels)
   }
 }
 
-#define UI_IMAGE_FIT(image) (Clay_ImageElementConfig) { \
-  .sourceDimensions = { model_##image##_size_x, model_##image##_size_y }, \
-  .imageData = gl_Model_##image, \
-  .transform = f4x4_mul_f4x4( \
-    f4x4_scale3((f3) { 1/model_##image##_size_x, 1/model_##image##_size_y, 1.0f }), \
-    f4x4_move((f3) { -0.5f*(1 - model_##image##_size_x), -0.5f*(1 - model_##image##_size_y), 0.0f }) \
-  ) \
-}
+/* MARK: END of "DUMB UI COMPONENTS" */
 
 static void ui_wabisabi_window(
   gl_Model emblem,
   Clay_String window_title,
-  bool open,
+  ui_WabisabiWindow *window,
   void content_fn(void)
 ) {
 #define WABI_DEBUG_BOUNDS 0
 
+  /* currently window_title is used to make an ID for the draggable
+   * area of the window, which needs to persist across frames so we can
+   * know if they previously clicked on it and started dragging */
+
+  if (!window->open) return;
+
   /* Wabisabi Window - Root */
   CLAY({
     .floating.attachTo = CLAY_ATTACH_TO_ROOT,
-    .floating.offset = { 142, 68 },
+    .floating.offset = { window->x, window->y },
     .layout.sizing.width  = CLAY_SIZING_FIXED(400),
     .layout.sizing.height = CLAY_SIZING_FIT(100, 400),
     #if WABI_DEBUG_BOUNDS
@@ -2310,7 +2486,7 @@ static void ui_wabisabi_window(
   }) {
 
     /* Wabisabi Window - Background */
-    CLAY({ 
+    CLAY({
       .layout.sizing.width  = CLAY_SIZING_GROW(0),
       .layout.sizing.height = CLAY_SIZING_GROW(0),
 
@@ -2336,7 +2512,7 @@ static void ui_wabisabi_window(
       .floating.attachPoints.element = CLAY_ATTACH_POINT_LEFT_TOP,
       .floating.attachPoints.parent = CLAY_ATTACH_POINT_LEFT_TOP,
       .floating.pointerCaptureMode = CLAY_POINTER_CAPTURE_MODE_PASSTHROUGH,
-      
+
       .image.sourceDimensions = { 1, 1 },
       .image.imageData = gl_Model_UiWindowCorner,
       .image.transform = f4x4_scale(1),
@@ -2359,6 +2535,7 @@ static void ui_wabisabi_window(
       .layout.padding.bottom = 2,
       .layout.layoutDirection = CLAY_TOP_TO_BOTTOM,
     }) {
+      Clay_ElementId drag_bar_id = CLAY_SID(window_title);
 
       /* Wabisabi Window - Top Bar */
       CLAY({
@@ -2393,8 +2570,29 @@ static void ui_wabisabi_window(
 
         }
 
+        /* click and drag to move behavior */
+        {
+          if (Clay_Hovered()) {
+            jeux.sdl.cursor_next = jeux.sdl.cursor_move;
+            if (gui.lmb_down) {
+              window->lmb_down_x = window->x;
+              window->lmb_down_y = window->y;
+              gui.lmb_down_el = drag_bar_id;
+            }
+          }
+
+          bool held = gui.lmb_down_el.id == drag_bar_id.id;
+
+          if (held) {
+            float dx = jeux.mouse_ui_x - jeux.mouse_ui_lmb_down_x;
+            float dy = jeux.mouse_ui_y - jeux.mouse_ui_lmb_down_y;
+            window->x = window->lmb_down_x + dx;
+            window->y = window->lmb_down_y + dy;
+          }
+        }
+
         CLAY({ .layout.padding.top = 8 }) {
-          CLAY_TEXT(CLAY_STRING("OPTIONS"), CLAY_TEXT_CONFIG({ .fontSize = 30, .textColor = ink }));
+          CLAY_TEXT(window_title, CLAY_TEXT_CONFIG({ .fontSize = 30, .textColor = ink }));
         };
 
         CLAY({
@@ -2406,8 +2604,9 @@ static void ui_wabisabi_window(
         }) {
           size_t icon_size = 20;
           if (Clay_Hovered()) {
+            jeux.sdl.cursor_next = jeux.sdl.cursor_doable;
             icon_size = 22;
-            if (gui.lmb_click) gui.options.open ^= 1;
+            if (gui.lmb_click) window->open ^= 1;
           }
           ui_icon(gl_Model_UiEcksButton, icon_size);
         };
@@ -2422,12 +2621,13 @@ static void ui_wabisabi_window(
         .layout.padding.bottom = 24,
         .layout.padding.left = 24,
         .layout.padding.right = 24,
-    
+
         #if WABI_DEBUG_BOUNDS
         .border = { .color = { 0, 255, 0, 255 }, .width = { 4, 4, 4, 4 }},
         #endif
       }) {
 
+        /* Wabisabi Window - Bottom Border */
         CLAY({
           .layout.sizing.width  = CLAY_SIZING_GROW(0),
           .layout.sizing.height = CLAY_SIZING_GROW(0),
@@ -2440,8 +2640,7 @@ static void ui_wabisabi_window(
 
           .image = UI_IMAGE_FIT(UiWindowBorder),
 
-        }) {
-        }
+        });
 
         content_fn();
       }
@@ -2451,6 +2650,7 @@ static void ui_wabisabi_window(
   }
 #undef WABI_DEBUG_BOUNDS
 }
+
 
 static void ui_window_content_options(void) {
 
@@ -2498,7 +2698,7 @@ static void ui_window_content_options(void) {
 
     /* antialiasing approach dropdown */
     CLAY(pair) {
-      CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("ANTIALIASING"), CLAY_TEXT_CONFIG(label)); }; 
+      CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("ANTIALIASING"), CLAY_TEXT_CONFIG(label)); };
       Clay_String labels[] = {
         [gl_AntiAliasingApproach_None  ] = CLAY_STRING("NONE"),
         [gl_AntiAliasingApproach_Linear] = CLAY_STRING("Linear"),
@@ -2506,21 +2706,41 @@ static void ui_window_content_options(void) {
         [gl_AntiAliasingApproach_2XSSAA] = CLAY_STRING("2x SSAA"),
         [gl_AntiAliasingApproach_4XSSAA] = CLAY_STRING("4x SSAA"),
       };
-      CLAY(pair_inner) { ui_picker(&gui.options.antialiasing, gl_AntiAliasingApproach_COUNT, labels); }; 
+      CLAY(pair_inner) { ui_picker(&gui.options.antialiasing, gl_AntiAliasingApproach_COUNT, labels); };
     }
 
     /* ui scale slider */
     CLAY(pair) {
       CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("UI SCALE"), CLAY_TEXT_CONFIG(label)); }
-      CLAY(pair_inner) { ui_slider(CLAY_ID("UI SCALE SLIDER"), &gui.options.ui_scale, 0.2, 2); }
+      CLAY(pair_inner) {
+        /* don't actually apply it until you let go because scaling something as you
+         * move it around is WEIRD */
+        bool released = ui_slider(CLAY_ID("UI SCALE SLIDER"), &gui.options.ui_scale_tmp, 0.2, 2);
+
+        if (released) {
+          f3 p = { gui.options.window.x, gui.options.window.y };
+          p = f4x4_transform_f3(jeux.ui_transform, p);
+
+          gui.options.ui_scale = gui.options.ui_scale_tmp;
+          gl_resize();
+
+          p = f4x4_transform_f3(f4x4_invert(jeux.ui_transform), p);
+          gui.options.window.x = fmaxf(p.x, 0);
+          gui.options.window.y = fmaxf(p.y, 0);
+
+          f3 ui = jeux_screen_to_ui((f3) { jeux.win_size_x, jeux.win_size_y, 0 });
+          Clay_SetLayoutDimensions((Clay_Dimensions) { ui.x, ui.y });
+        }
+      }
     }
   }
 }
 
 static void ui_main(void) {
+  /* mouse_up resets lmb_down_el at the end of the frame so that elements
+   * have a frame to clean up (e.g. gui.lmb_click && gui.lmb_down_el == me) */
   bool mouse_up = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_RELEASED_THIS_FRAME;
-  if (mouse_up) gui.lmb_down_el = (Clay_ElementId) { 0 };
-  gui.lmb_click = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_RELEASED_THIS_FRAME;
+  gui.lmb_click = mouse_up;
   gui.lmb_down = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_PRESSED_THIS_FRAME;
 
   /* HUD */
@@ -2541,8 +2761,11 @@ static void ui_main(void) {
         .layout.sizing = { CLAY_SIZING_FIXED(32), CLAY_SIZING_FIXED(32) },
         .cornerRadius = CLAY_CORNER_RADIUS(16),
       }) {
+        if (Clay_Hovered()) {
+          jeux.sdl.cursor_next = jeux.sdl.cursor_doable;
+        }
         if (Clay_Hovered() && gui.lmb_click) {
-          gui.options.open ^= 1;
+          gui.options.window.open ^= 1;
         }
 
         /* icon here */
@@ -2559,7 +2782,10 @@ static void ui_main(void) {
   ui_wabisabi_window(
     gl_Model_UiOptions,
     CLAY_STRING("OPTIONS"),
-    gui.options.open,
+    &gui.options.window,
     &ui_window_content_options
   );
+
+  if (mouse_up) gui.lmb_down_el = (Clay_ElementId) { 0 };
 }
+#undef gui
