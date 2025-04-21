@@ -1908,6 +1908,10 @@ static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
   jeux.gl.geo.dyn = &jeux.gl.geo.dyn_geo_world;
 }
 
+f3 sim_bounds_path[] =
+#include "../collision/IntroGravestoneTerrain.h"
+;
+
 static void ui_main(void);
 SDL_AppResult SDL_AppIterate(void *appstate) {
   /* timekeeping */
@@ -2013,6 +2017,28 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     /* debug */
     {
       float debug_thickness = jeux.win_size_x * 0.00225f;
+
+      {
+        int sim_bounds_path_count = jx_COUNT(sim_bounds_path);
+        for (int i = 0; i < sim_bounds_path_count; i++) {
+          f3 lhs = sim_bounds_path[(i + 0) % sim_bounds_path_count];
+          f3 rhs = sim_bounds_path[(i + 1) % sim_bounds_path_count];
+          lhs.z = rhs.z = -0.5f;
+
+          lhs = jeux_world_to_screen(lhs);
+          rhs = jeux_world_to_screen(rhs);
+
+          lhs.z += 0.1f;
+          rhs.z += 0.1f;
+
+          gl_geo_line(
+            lhs,
+            rhs,
+            debug_thickness,
+            (Color) { 255, 0, 0, 255 }
+          );
+        }
+      }
 
       /* debug where we think the mouse is */
       if (0) {
