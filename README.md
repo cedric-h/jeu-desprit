@@ -30,7 +30,7 @@ RELEASE=1 ./bs/macos_build.sh
 ## Windoze 🪟
 highly recommended debugger: [raddebugger](https://github.com/EpicGamesExt/raddebugger/)
 
-highly recommended profiler: [superliminal](https://superluminal.eu/)
+highly recommended profiler: [superluminal](https://superluminal.eu/)
 
 (call is not needed if using powershell)
 ```

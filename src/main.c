@@ -19,6 +19,7 @@ typedef union { float arr[4][4]; f4 rows[4]; float floats[16]; } f4x4;
 #include "clay.h"
 #include "font.h"
 
+/* enables extra things in the options, escape to quit, etc. */
 #define GAME_DEBUG true
 
 #define BREAKPOINT() __builtin_debugtrap()
@@ -38,6 +39,11 @@ static f3 lerp3(f3 a, f3 b, float t) {
     .y = lerp(a.y, b.y, t),
     .z = lerp(a.z, b.z, t)
   };
+}
+static float f3_length(f3 f) { return sqrtf(f.x*f.x + f.y*f.y + f.z*f.z); }
+static f3 f3_norm(f3 f) {
+  float len = f3_length(f);
+  return (f3) { f.x / len, f.y / len, f.z / len };
 }
 
 static f3 ray_hit_plane(f3 ray_origin, f3 ray_vector, f3 plane_origin, f3 plane_vector) {
@@ -364,6 +370,7 @@ typedef struct {
   f4x4 matrix;
   /* doesn't premultiply in camera matrix for you */
   bool two_dee_ui;
+  Box2 scissor;
 } gl_ModelDraw;
 
 typedef struct {
@@ -436,8 +443,12 @@ static struct {
   struct {
     struct {
       bool perspective;
-      float fov;
+      float fov, dist, angle, height;
     } camera;
+
+    struct {
+      float angle, height;
+    } light;
 
     struct {
       gl_DynGeo dyn_geo_ui, dyn_geo_world;
@@ -462,6 +473,7 @@ static struct {
       GLint shader_a_color;
       GLint shader_a_normal;
       GLint shader_u_mvp;
+      GLint shader_u_light_dir;
     } geo;
 
     /* pp is "post processing" - used for AA and FX */
@@ -519,10 +531,16 @@ static struct {
 } jeux = {
   .win_size_x = 800,
   .win_size_y = 450,
-  .ui_scale = 1.0f,
+  .ui_scale = 0.5f,
 
   .gl.pp.current_aa = gl_AntiAliasingApproach_4XSSAA,
   .gl.camera.fov = 70.0f,
+  .gl.camera.dist = 5.0f,
+  .gl.camera.angle = 0.0f,
+  .gl.camera.height = 1.0f,
+
+  .gl.light.angle = 0.35f,
+  .gl.light.height = 1.36f,
 
   .gui = {
     .options.window.open = true,
@@ -545,6 +563,18 @@ static f3 jeux_screen_to_world(f3 p) {
 static f3 jeux_screen_to_ui(f3 p) {
   p = f4x4_transform_f3(jeux.screen, p);
   p = f4x4_transform_f3(f4x4_invert(jeux.ui_transform), p);
+  return p;
+}
+static f3 jeux_ui_to_viewport(f3 p) {
+  float size_x = jeux.gl.pp.phys_win_size_x*jeux.gl.pp.fb_scale;
+  float size_y = jeux.gl.pp.phys_win_size_y*jeux.gl.pp.fb_scale;
+  f4x4 viewport = f4x4_ortho(
+     0.0f, size_x,
+     0.0f, size_y,
+    -1.0f,  1.0f
+  );
+  p = f4x4_transform_f3(jeux.ui_transform, p);
+  p = f4x4_transform_f3(f4x4_invert(viewport), p);
   return p;
 }
 
@@ -753,6 +783,7 @@ static SDL_AppResult gl_init(void) {
           "varying vec3 v_normal;\n"
           "\n"
           "uniform sampler2D u_tex;\n"
+          "uniform vec3 u_light_dir;\n"
           "\n"
           "void main() {\n"
           /* debug normals */
@@ -761,8 +792,7 @@ static SDL_AppResult gl_init(void) {
           // use unchanged color if no normals at all */
           "  if (abs(dot(v_normal, vec3(1))) < 0.00001) { gl_FragColor = v_color; return; }\n"
 
-          "  vec3 light_dir = normalize(vec3(4.0, 1.5, 5.9));\n"
-          "  float diffuse = max(dot(v_normal, light_dir), 0.0);\n"
+          "  float diffuse = max(dot(v_normal, u_light_dir), 0.0);\n"
           "  float ramp = 0.0;\n"
           "       if (diffuse > 0.923) ramp = 1.00;\n"
           "  else if (diffuse > 0.477) ramp = 0.50;\n"
@@ -847,7 +877,6 @@ static SDL_AppResult gl_init(void) {
           "}\n"
       },
 
-      /* technically identical to None but /shrug */
       {
         .dst = &jeux.gl.pp.aa_shader[gl_AntiAliasingApproach_Linear].shader,
         .debug_name = "pp_aa_linear",
@@ -1130,7 +1159,7 @@ static SDL_AppResult gl_init(void) {
         gl_geo_Vtx *v = vtx + vtx_i;
         v->color.a = 255;
 
-        if (i == gl_Model_IntroGravestoneTerrain) {
+        if (i == gl_Model_IntroGravestoneTerrain && 0) {
           float desaturation = 0.4; /* 0 .. 1 */
 
           float r = (float)v->color.r / 255.0f;
@@ -1154,10 +1183,11 @@ static SDL_AppResult gl_init(void) {
     }
 
     /* shader data layout */
-    jeux.gl.geo.shader_u_mvp    = glGetUniformLocation(jeux.gl.geo.shader, "u_mvp"  );
-    jeux.gl.geo.shader_a_pos    = glGetAttribLocation (jeux.gl.geo.shader, "a_pos"  );
-    jeux.gl.geo.shader_a_color  = glGetAttribLocation (jeux.gl.geo.shader, "a_color");
-    jeux.gl.geo.shader_a_normal = glGetAttribLocation (jeux.gl.geo.shader, "a_normal");
+    jeux.gl.geo.shader_u_mvp       = glGetUniformLocation(jeux.gl.geo.shader, "u_mvp");
+    jeux.gl.geo.shader_u_light_dir = glGetUniformLocation(jeux.gl.geo.shader, "u_light_dir");
+    jeux.gl.geo.shader_a_pos       = glGetAttribLocation (jeux.gl.geo.shader, "a_pos");
+    jeux.gl.geo.shader_a_color     = glGetAttribLocation (jeux.gl.geo.shader, "a_color");
+    jeux.gl.geo.shader_a_normal    = glGetAttribLocation (jeux.gl.geo.shader, "a_normal");
 
 #define GEO_VTX_BIND_LAYOUT { \
       glEnableVertexAttribArray(jeux.gl.geo.shader_a_pos); \
@@ -1864,6 +1894,7 @@ static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
         *jeux.gl.geo.model_draws_wtr++ = (gl_ModelDraw) {
           .model = rcmd->renderData.image.imageData,
           .matrix = mvp,
+          .scissor = clip,
           .two_dee_ui = true,
         };
       } break;
@@ -1901,11 +1932,12 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     jeux.camera = (f4x4) {0};
 
     {
-      float dist = 8.0f;
+      float dist = jeux.gl.camera.dist;
+      float height = jeux.gl.camera.height;
 
-      float x = cosf(M_PI * -0.6f) * dist;
-      float y = sinf(M_PI * -0.6f) * dist;
-      jeux.camera_eye = (f3) { x, y, 1.0f * dist };
+      float x = cosf(jeux.gl.camera.angle) * dist;
+      float y = sinf(jeux.gl.camera.angle) * dist;
+      jeux.camera_eye = (f3) { x, y, height * dist };
     }
 
     {
@@ -1959,7 +1991,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     {
       Clay_RenderCommandArray cmds;
 
-      /* Because of my proclivity to use Clay_Hovered() instead of
+      /* Because of my proclivity towards using Clay_Hovered() instead of
        * Clay_OnHover (because I think the callback is ugly), we have
        * to layout 3 times/frame to prevent there from being any instability */
       for (int i = 0; i < 3; i++) {
@@ -2182,6 +2214,11 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
           glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, mvp->floats);
 
+          float angle = jeux.gl.light.angle;
+          float height = jeux.gl.light.height;
+          f3 light_dir = f3_norm((f3) { cosf(angle), sinf(angle), height });
+          glUniform3f(jeux.gl.geo.shader_u_light_dir, light_dir.x, light_dir.y, light_dir.z);
+
           glDrawElements(GL_TRIANGLES, 3*(dyn->idx_wtr - dyn->idx), GL_UNSIGNED_SHORT, 0);
         }
 
@@ -2199,14 +2236,36 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
           if (draw->two_dee_ui) {
             f4x4 mvp = jeux.ui_transform;
             mvp = f4x4_mul_f4x4(mvp, draw->matrix);
+
             glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, mvp.floats);
+
+            bool do_scissor = (!SDL_isinf(draw->scissor.min.x)) ||
+                              (!SDL_isinf(draw->scissor.max.y)) ||
+                              (!SDL_isinf(draw->scissor.min.x)) ||
+                              (!SDL_isinf(draw->scissor.max.y));
+
+            if (do_scissor) {
+              glEnable(GL_SCISSOR_TEST);
+
+              f3 corner0 = jeux_ui_to_viewport((f3) { draw->scissor.min.x, draw->scissor.min.y, 0 });
+              f3 corner1 = jeux_ui_to_viewport((f3) { draw->scissor.max.x, draw->scissor.max.y, 0 });
+              float min_x = fminf(corner0.x, corner1.x);
+              float min_y = fminf(corner0.y, corner1.y);
+              float max_x = fmaxf(corner0.x, corner1.x);
+              float max_y = fmaxf(corner0.y, corner1.y);
+              glScissor(min_x, min_y, max_x - min_x, max_y - min_y);
+            }
+
+            glDrawElements(GL_TRIANGLES, 3 * tri_count, GL_UNSIGNED_SHORT, 0);
+
+            glDisable(GL_SCISSOR_TEST);
           } else {
             f4x4 mvp = jeux.camera;
             mvp = f4x4_mul_f4x4(mvp, draw->matrix);
             glUniformMatrix4fv(jeux.gl.geo.shader_u_mvp, 1, 0, mvp.floats);
-          }
 
-          glDrawElements(GL_TRIANGLES, 3 * tri_count, GL_UNSIGNED_SHORT, 0);
+            glDrawElements(GL_TRIANGLES, 3 * tri_count, GL_UNSIGNED_SHORT, 0);
+          }
         }
 
       }
@@ -2728,7 +2787,16 @@ static void ui_wabisabi_window(
 
         });
 
-        content_fn();
+        CLAY({
+          .layout.sizing.width  = CLAY_SIZING_GROW(0),
+          .layout.sizing.height = CLAY_SIZING_GROW(0),
+
+          .layout.padding.right = 12,
+
+          .scroll = { .vertical = true },
+        }) {
+          content_fn();
+        }
       }
 
     }
@@ -2759,27 +2827,6 @@ static void ui_window_content_options(void) {
       .fontSize = text_body,
       .textColor = ink
     };
-
-    /* perspective checkbox */
-    CLAY(pair) {
-
-      CLAY(pair_inner) {
-        CLAY_TEXT(CLAY_STRING("PERSPECTIVE"), CLAY_TEXT_CONFIG(label));
-      }
-
-      CLAY({ .layout.sizing = { .width = CLAY_SIZING_GROW(0) } }) {
-        CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
-        ui_checkbox(&jeux.gl.camera.perspective);
-        CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
-      }
-
-    }
-
-    /* FOV slider */
-    if (jeux.gl.camera.perspective) CLAY(pair) {
-      CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("FOV"), CLAY_TEXT_CONFIG(label)); }
-      CLAY(pair_inner) { ui_slider(CLAY_ID("FOV_SLIDER"), &jeux.gl.camera.fov, 35, 100); }
-    }
 
     /* antialiasing approach dropdown */
     CLAY(pair) {
@@ -2834,6 +2881,73 @@ static void ui_window_content_options(void) {
         }
       }
     }
+
+#if GAME_DEBUG
+
+    /* "CAMERA" header */
+    CLAY({ .layout.sizing.height = CLAY_SIZING_FIXED(30) });
+    CLAY_TEXT(CLAY_STRING("CAMERA"), CLAY_TEXT_CONFIG({ .fontSize = 30, .textColor = ink }));
+    CLAY({ .layout.sizing.height = CLAY_SIZING_FIXED(20) });
+
+    /* perspective checkbox */
+    CLAY(pair) {
+
+      CLAY(pair_inner) {
+        CLAY_TEXT(CLAY_STRING("PERSPECTIVE"), CLAY_TEXT_CONFIG(label));
+      }
+
+      CLAY({ .layout.sizing = { .width = CLAY_SIZING_GROW(0) } }) {
+        CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
+        ui_checkbox(&jeux.gl.camera.perspective);
+        CLAY({ .layout.sizing.width = CLAY_SIZING_GROW(0) });
+      }
+
+    }
+
+    /* FOV slider */
+    if (jeux.gl.camera.perspective) CLAY(pair) {
+      CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("FOV"), CLAY_TEXT_CONFIG(label)); }
+      CLAY(pair_inner) { ui_slider(CLAY_ID("FOV_SLIDER"), &jeux.gl.camera.fov, 35, 100); }
+    }
+
+    /* camera dist slider */
+    if (jeux.gl.camera.perspective) CLAY(pair) {
+      CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("DIST"), CLAY_TEXT_CONFIG(label)); }
+      CLAY(pair_inner) { ui_slider(CLAY_ID("DIST_SLIDER"), &jeux.gl.camera.dist, 2, 10); }
+    }
+
+    /* camera angle slider */
+    CLAY(pair) {
+      CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("CAMERA ANGLE"), CLAY_TEXT_CONFIG(label)); }
+      CLAY(pair_inner) { ui_slider(CLAY_ID("CAMERA_ANGLE_SLIDER"), &jeux.gl.camera.angle, -M_PI, M_PI); }
+    }
+
+    /* camera height slider */
+    CLAY(pair) {
+      CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("CAMERA HEIGHT"), CLAY_TEXT_CONFIG(label)); }
+      CLAY(pair_inner) { ui_slider(CLAY_ID("CAMERA_HEIGHT_SLIDER"), &jeux.gl.camera.height, 0.1f, 4.0f); }
+    }
+
+    /* "LIGHTING" header */
+    CLAY({ .layout.sizing.height = CLAY_SIZING_FIXED(30) });
+    CLAY_TEXT(CLAY_STRING("LIGHTING"), CLAY_TEXT_CONFIG({ .fontSize = 30, .textColor = ink }));
+    CLAY({ .layout.sizing.height = CLAY_SIZING_FIXED(20) });
+
+    /* light angle slider */
+    CLAY(pair) {
+      CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("LIGHT ANGLE"), CLAY_TEXT_CONFIG(label)); }
+      CLAY(pair_inner) { ui_slider(CLAY_ID("LIGHT_ANGLE_SLIDER"), &jeux.gl.light.angle, -M_PI, M_PI); }
+    }
+
+    /* camera height slider */
+    CLAY(pair) {
+      CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("LIGHT HEIGHT"), CLAY_TEXT_CONFIG(label)); }
+      CLAY(pair_inner) { ui_slider(CLAY_ID("LIGHT_HEIGHT_SLIDER"), &jeux.gl.light.height, 0.1f, 4.0f); }
+    }
+
+
+#endif
+
   }
 }
 
