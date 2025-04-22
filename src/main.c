@@ -356,7 +356,8 @@ typedef enum {
 #include "../svg/include/UiWindowTop.svg.h"
 #include "../svg/include/UiWindowBorder.svg.h"
 #include "../svg/include/UiWindowBg.svg.h"
-#include "walk.h"
+
+#include "anim.h"
 
 struct {
   gl_geo_Vtx *vtx;
@@ -2199,6 +2200,13 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     /* draw figure */
     {
+      // animdata_Frame *animdata_frames = animdata_turn90_right_frames;
+      // size_t animdata_frame_count = jx_COUNT(animdata_turn90_right_frames);
+      // float animdata_duration = animdata_turn90_right_duration;
+      animdata_Frame *animdata_frames = animdata_walk_frames;
+      size_t animdata_frame_count = jx_COUNT(animdata_walk_frames);
+      float animdata_duration = animdata_walk_duration;
+
       f4x4 model = f4x4_scale(1.0f);
 
       /* rotate towards mouse */
@@ -2207,15 +2215,15 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
           model = f4x4_mul_f4x4(model, f4x4_turn(atan2f(mouse.y - 0, mouse.x - 0) + (M_PI * 0.5f)));
       }
 
-      float t = fmodf(jeux.elapsed, animdata_duration);
+      float t = 0;// fmodf(jeux.elapsed, animdata_duration);
 
       size_t rhs_frame = -1;
-      for (size_t i = 0; i < jx_COUNT(animdata_frames); i++)
+      for (size_t i = 0; i < animdata_frame_count; i++)
         if (animdata_frames[i].time > t) { rhs_frame = i; break; }
       bool last_frame = rhs_frame == -1;
 
-      size_t lhs_frame = (last_frame ? jx_COUNT(animdata_frames) : rhs_frame) - 1;
-      rhs_frame = (lhs_frame + 1) % jx_COUNT(animdata_frames);
+      size_t lhs_frame = (last_frame ? animdata_frame_count : rhs_frame) - 1;
+      rhs_frame = (lhs_frame + 1) % animdata_frame_count;
       float next_frame_t = last_frame ? animdata_duration : animdata_frames[rhs_frame].time;
       float this_frame_t = animdata_frames[lhs_frame].time;
       float tween_t = (t - this_frame_t) / (next_frame_t - this_frame_t);

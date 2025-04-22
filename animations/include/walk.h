@@ -1,44 +1,5 @@
-typedef enum animdata_JointKey {
-  animdata_JointKey_Hips,
-  animdata_JointKey_RightArm,
-  animdata_JointKey_RightForeArm,
-  animdata_JointKey_RightHand,
-  animdata_JointKey_Neck,
-  animdata_JointKey_Head,
-  animdata_JointKey_LeftArm,
-  animdata_JointKey_LeftForeArm,
-  animdata_JointKey_LeftHand,
-  animdata_JointKey_RightLeg,
-  animdata_JointKey_RightToeBase,
-  animdata_JointKey_RightToe_End,
-  animdata_JointKey_LeftLeg,
-  animdata_JointKey_LeftToeBase,
-  animdata_JointKey_LeftToe_End,
-  animdata_JointKey_COUNT
-} animdata_JointKey_t;
-
-struct { animdata_JointKey_t from, to; } animdata_limb_connections[] = {
-  { .from = animdata_JointKey_RightLeg,     .to = animdata_JointKey_RightToeBase },
-  { .from = animdata_JointKey_LeftLeg,      .to = animdata_JointKey_LeftToeBase  },
-  { .from = animdata_JointKey_Neck,         .to = animdata_JointKey_RightArm     },
-  { .from = animdata_JointKey_Neck,         .to = animdata_JointKey_LeftArm      },
-  { .from = animdata_JointKey_Hips,         .to = animdata_JointKey_RightLeg     },
-  { .from = animdata_JointKey_Hips,         .to = animdata_JointKey_LeftLeg      },
-  { .from = animdata_JointKey_Hips,         .to = animdata_JointKey_Neck         },
-  { .from = animdata_JointKey_RightArm,     .to = animdata_JointKey_RightForeArm },
-  { .from = animdata_JointKey_RightForeArm, .to = animdata_JointKey_RightHand    },
-  { .from = animdata_JointKey_Neck,         .to = animdata_JointKey_Head         },
-  { .from = animdata_JointKey_LeftArm,      .to = animdata_JointKey_LeftForeArm  },
-  { .from = animdata_JointKey_LeftForeArm,  .to = animdata_JointKey_LeftHand     },
-  { .from = animdata_JointKey_RightToeBase, .to = animdata_JointKey_RightToe_End },
-  { .from = animdata_JointKey_LeftToeBase,  .to = animdata_JointKey_LeftToe_End  },
-};
-
-float animdata_duration = 1;
-struct {
-    float time;
-    f3 joint_pos[animdata_JointKey_COUNT];
-} animdata_frames[] = {
+float animdata_walk_duration = 1;
+animdata_Frame animdata_walk_frames[] = {
   { .time = 0, .joint_pos = {
     [animdata_JointKey_Hips        ] = { 0.0003456747531890869, -0.015296831130981446, 1.0161539459228517 },
     [animdata_JointKey_RightArm    ] = { -0.1423450719941006, 0.02347072890076369, 1.384242525517638 },
