@@ -33,7 +33,34 @@ static float lerp(float v0, float v1, float t) { return (1.0f - t) * v0 + t * v1
 static float clamp(float min, float max, float t) { return fminf(max, fmaxf(min, t)); }
 static float inv_lerp(float min, float max, float p) { return (p - min) / (max - min); }
 
-static f3 lerp3(f3 a, f3 b, float t) {
+static float f2_length(f2 f) { return sqrtf(f.x*f.x + f.y*f.y); }
+static f2 f2_norm(f2 f) {
+  float len = f2_length(f);
+  return (f2) { f.x / len, f.y / len };
+}
+static bool f2_line_hits_line(f2 from0, f2 to0, f2 from1, f2 to1, f2 *out) {
+  float a = from0.x, b = from0.y,
+        c =   to0.x, d =   to0.y,
+        p = from1.x, q = from1.y,
+        r =   to1.x, s =   to1.y;
+  float det = (c - a) * (s - q) - (r - p) * (d - b);
+  if (det < 0.001) {
+    return false;
+  } else {
+    float lambda = ((s - q) * (r - a) + (p - r) * (s - b)) / det;
+    float gamma = ((b - d) * (r - a) + (c - a) * (s - b)) / det;
+
+    if ((0 < lambda && lambda < 1) && (0 < gamma && gamma < 1)) {
+      if (out) out->x = lerp(from0.x, to0.x, lambda);
+      if (out) out->y = lerp(from0.y, to0.y, lambda);
+      return true;
+    }
+
+    return false;
+  }
+}
+
+static f3 f3_lerp(f3 a, f3 b, float t) {
   return (f3) {
     .x = lerp(a.x, b.x, t),
     .y = lerp(a.y, b.y, t),
@@ -384,6 +411,15 @@ typedef struct {
   GLuint buf_idx;
 } gl_DynGeo;
 
+/* key actions, abstracted away from scancodes so we can support bindings */
+typedef enum {
+  KeyAction_Up,
+  KeyAction_Down,
+  KeyAction_Left,
+  KeyAction_Right,
+  KeyAction_COUNT
+} KeyAction;
+
 typedef struct {
   bool open;
   float x, y;
@@ -418,6 +454,7 @@ static struct {
 
   /* input */
   size_t win_size_x, win_size_y;
+  KeyAction key_actions[KeyAction_COUNT];
   float mouse_screen_x, mouse_screen_y, mouse_lmb_down;
   /* this is different than mouse_screen_x because dynamic ui scale; screen x/y is in raw screen coordinates */
   float mouse_ui_x, mouse_ui_y, mouse_ui_lmb_down_x, mouse_ui_lmb_down_y;
@@ -437,13 +474,21 @@ static struct {
    */
   f4x4 camera, screen, ui_transform;
   float ui_scale;
-  f3 camera_eye;
+
+  /* sim, short for "simulation," stores things related to the gameplay, physics and combat. */
+  struct {
+    struct {
+      f2 pos, vel;
+    } player;
+  } sim;
 
   /* renderer ("gl") */
   struct {
     struct {
       bool perspective;
       float fov, dist, angle, height;
+
+      f3 eye, target;
     } camera;
 
     struct {
@@ -543,7 +588,7 @@ static struct {
   .gl.light.height = 1.36f,
 
   .gui = {
-    .options.window.open = true,
+    // .options.window.open = true,
     .options.window.x = 142,
     .options.window.y = 68,
   }
@@ -728,6 +773,21 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     if (event->type == SDL_EVENT_MOUSE_WHEEL) {
       Clay_UpdateScrollContainers(true, (Clay_Vector2) { event->wheel.x, event->wheel.y }, 0.01f);
     }
+
+    /* https://wiki.libsdl.org/SDL3/BestKeyboardPractices */
+    if (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) {
+      bool down = event->type == SDL_EVENT_KEY_DOWN;
+      if (event->key.scancode == SDL_SCANCODE_W) jeux.key_actions[KeyAction_Up   ] = down;
+      if (event->key.scancode == SDL_SCANCODE_S) jeux.key_actions[KeyAction_Down ] = down;
+      if (event->key.scancode == SDL_SCANCODE_A) jeux.key_actions[KeyAction_Left ] = down;
+      if (event->key.scancode == SDL_SCANCODE_D) jeux.key_actions[KeyAction_Right] = down;
+
+      if (event->key.scancode == SDL_SCANCODE_UP   ) jeux.key_actions[KeyAction_Up   ] = down;
+      if (event->key.scancode == SDL_SCANCODE_DOWN ) jeux.key_actions[KeyAction_Down ] = down;
+      if (event->key.scancode == SDL_SCANCODE_LEFT ) jeux.key_actions[KeyAction_Left ] = down;
+      if (event->key.scancode == SDL_SCANCODE_RIGHT) jeux.key_actions[KeyAction_Right] = down;
+    }
+
     if (event->type == SDL_EVENT_KEY_UP) {
 #if GAME_DEBUG
       if (event->key.key == SDLK_ESCAPE) {
@@ -1941,7 +2001,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
       float x = cosf(jeux.gl.camera.angle) * dist;
       float y = sinf(jeux.gl.camera.angle) * dist;
-      jeux.camera_eye = (f3) { x, y, height * dist };
+      jeux.gl.camera.eye = (f3) { x, y, height * dist };
     }
 
     {
@@ -1961,7 +2021,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         );
 
       f4x4 orbit = f4x4_target_to(
-        jeux.camera_eye,
+        jeux.gl.camera.eye,
         (f3) { 0.0f, 0.0f, 1.0f },
         (f3) { 0.0f, 0.0f, 1.0f }
       );
@@ -2023,7 +2083,6 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         for (int i = 0; i < sim_bounds_path_count; i++) {
           f3 lhs = sim_bounds_path[(i + 0) % sim_bounds_path_count];
           f3 rhs = sim_bounds_path[(i + 1) % sim_bounds_path_count];
-          lhs.z = rhs.z = -0.5f;
 
           lhs = jeux_world_to_screen(lhs);
           rhs = jeux_world_to_screen(rhs);
@@ -2039,6 +2098,45 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
           );
         }
       }
+
+      {
+        /* lil ring around the player,
+         * useful for debugging physics */
+        gl_geo_ring3(
+          32,
+          (f3) { 0.0f, 0.0f, -0.01f },
+          0.5f,
+          debug_thickness,
+          (Color) { 200, 100, 20, 255 }
+        );
+
+        f2 input_dir = {0};
+        if (jeux.key_actions[KeyAction_Up   ]) input_dir.y += 1;
+        if (jeux.key_actions[KeyAction_Down ]) input_dir.y -= 1;
+        if (jeux.key_actions[KeyAction_Left ]) input_dir.x += 1;
+        if (jeux.key_actions[KeyAction_Right]) input_dir.x -= 1;
+        input_dir = f2_norm(input_dir);
+
+        f2 cam_forward = { -cosf(jeux.gl.camera.angle), -sinf(jeux.gl.camera.angle) };
+        f2 cam_side    = { -cam_forward.y, cam_forward.x };
+
+        f3 dir_indicator_start = { 0, 0, 0 };
+        f3 dir_indicator_end = { 0, 0, 0 };
+        dir_indicator_end.x += cam_side.x * input_dir.x * 0.6f;
+        dir_indicator_end.y += cam_side.y * input_dir.x * 0.6f;
+
+        dir_indicator_end.x += cam_forward.x * input_dir.y * 0.6f;
+        dir_indicator_end.y += cam_forward.y * input_dir.y * 0.6f;
+
+        gl_geo_line(
+          jeux_world_to_screen(dir_indicator_start),
+          jeux_world_to_screen(dir_indicator_end),
+          debug_thickness,
+          (Color) { 0, 0, 255, 255 }
+        );
+
+      }
+
 
       /* debug where we think the mouse is */
       if (0) {
@@ -2070,16 +2168,6 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
           (Color) { 255, 0, 0, 255 }
         );
       }
-
-      /* lil ring around the player,
-       * useful for debugging physics */
-      gl_geo_ring3(
-        32,
-        (f3) { 0.0f, 0.0f, -0.01f },
-        0.5f,
-        debug_thickness,
-        (Color) { 200, 100, 20, 255 }
-      );
 
 #if 0
       /* draw player-sized box around (0, 0, 0) */
@@ -2132,7 +2220,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       float this_frame_t = animdata_frames[lhs_frame].time;
       float tween_t = (t - this_frame_t) / (next_frame_t - this_frame_t);
 
-#define joint_pos(joint) lerp3(\
+#define joint_pos(joint) f3_lerp(\
   animdata_frames[lhs_frame].joint_pos[joint], \
   animdata_frames[rhs_frame].joint_pos[joint], \
   tween_t \
