@@ -402,7 +402,7 @@ static struct {
     SDL_Cursor *cursor_next;
   } sdl;
 
-  /* gui */
+  /* ui */
   struct {
     struct {
       ui_WabisabiWindow window;
@@ -413,7 +413,7 @@ static struct {
     Clay_ElementId lmb_down_el;
     bool lmb_click; /* left mouse button up this frame (what you want most of the time) */
     bool lmb_down; /* left mouse button down this frame */
-  } gui;
+  } ui;
 
 
   /* input */
@@ -542,7 +542,7 @@ static struct {
   .gl.light.angle = 0.35f,
   .gl.light.height = 1.36f,
 
-  .gui = {
+  .ui = {
     .options.window.open = true,
     .options.window.x = 142,
     .options.window.y = 68,
@@ -579,8 +579,8 @@ static f3 jeux_ui_to_viewport(f3 p) {
 }
 
 static SDL_AppResult gl_init(void);
-static void gui_handle_errors(Clay_ErrorData error_data) { SDL_Log("%s\n", error_data.errorText.chars); }
-static Clay_Dimensions gui_measure_text(Clay_StringSlice text, Clay_TextElementConfig *config, void *userData) {
+static void ui_handle_errors(Clay_ErrorData error_data) { SDL_Log("%s\n", error_data.errorText.chars); }
+static Clay_Dimensions ui_measure_text(Clay_StringSlice text, Clay_TextElementConfig *config, void *userData) {
   float size = config->fontSize;
   float scale = (size / font_BASE_CHAR_SIZE);
 
@@ -654,7 +654,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     if (gl_init_res != SDL_APP_CONTINUE) return gl_init_res;
   }
 
-  /* gui init - need to init gl first so that the
+  /* ui init - need to init gl first so that the
    * ui matrix thingy is initialized */
   {
     f3 ui = jeux_screen_to_ui((f3) { jeux.win_size_x, jeux.win_size_y, 0 });
@@ -665,9 +665,9 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
         .capacity = Clay_MinMemorySize()
       },
       (Clay_Dimensions) { ui.x, ui.y },
-      (Clay_ErrorHandler) { gui_handle_errors }
+      (Clay_ErrorHandler) { ui_handle_errors }
     );
-    Clay_SetMeasureTextFunction(gui_measure_text, NULL);
+    Clay_SetMeasureTextFunction(ui_measure_text, NULL);
   }
 
   return SDL_APP_CONTINUE;
@@ -2412,7 +2412,6 @@ uint16_t text_body = 24;
 uint16_t text_title = 24;
 
 /* massive hack. praying for forgiveness */
-#define gui (jeux.gui)
 
 /* If you give the SVG Cooker an SVG like this
  *
@@ -2502,7 +2501,7 @@ static void ui_checkbox(bool *state) {
       if (Clay_Hovered()) {
         jeux.sdl.cursor_next = jeux.sdl.cursor_doable;
         icon_size = 20;
-        if (gui.lmb_click) *state ^= 1;
+        if (jeux.ui.lmb_click) *state ^= 1;
       }
 
       ui_icon(gl_Model_UiCheckBox, icon_size);
@@ -2554,14 +2553,14 @@ static bool ui_slider(Clay_ElementId id, float *state, float min, float max) {
     }) {
       size_t icon_size = 15;
 
-      bool held = gui.lmb_down_el.id == handle_id.id;
+      bool held = jeux.ui.lmb_down_el.id == handle_id.id;
 
       if (Clay_Hovered() || held) {
         jeux.sdl.cursor_next = jeux.sdl.cursor_sideways;
         icon_size = 17;
 
-        if (gui.lmb_down) {
-          gui.lmb_down_el = handle_id;
+        if (jeux.ui.lmb_down) {
+          jeux.ui.lmb_down_el = handle_id;
         }
       }
 
@@ -2571,7 +2570,7 @@ static bool ui_slider(Clay_ElementId id, float *state, float min, float max) {
       }
 
       /* click is actually release - may be a stupid naming scheme on my part */
-      if (held && gui.lmb_click) {
+      if (held && jeux.ui.lmb_click) {
         released = true;
       }
 
@@ -2601,7 +2600,7 @@ static bool ui_arrow_button(bool left) {
         jeux.sdl.cursor_next = jeux.sdl.cursor_doable;
 
         icon_size = 17;
-        if (gui.lmb_click) click = true;
+        if (jeux.ui.lmb_click) click = true;
       }
 
       f4x4 mvp = f4x4_move((f3) { 0.5, 0.5, 0 });
@@ -2747,14 +2746,14 @@ static void ui_wabisabi_window(
         {
           if (Clay_Hovered()) {
             jeux.sdl.cursor_next = jeux.sdl.cursor_move;
-            if (gui.lmb_down) {
+            if (jeux.ui.lmb_down) {
               window->lmb_down_x = window->x;
               window->lmb_down_y = window->y;
-              gui.lmb_down_el = drag_bar_id;
+              jeux.ui.lmb_down_el = drag_bar_id;
             }
           }
 
-          bool held = gui.lmb_down_el.id == drag_bar_id.id;
+          bool held = jeux.ui.lmb_down_el.id == drag_bar_id.id;
 
           if (held) {
             float dx = jeux.mouse_ui_x - jeux.mouse_ui_lmb_down_x;
@@ -2779,7 +2778,7 @@ static void ui_wabisabi_window(
           if (Clay_Hovered()) {
             jeux.sdl.cursor_next = jeux.sdl.cursor_doable;
             icon_size = 22;
-            if (gui.lmb_click) window->open ^= 1;
+            if (jeux.ui.lmb_click) window->open ^= 1;
           }
           ui_icon(gl_Model_UiEcksButton, icon_size);
         };
@@ -2879,28 +2878,28 @@ static void ui_window_content_options(void) {
         float ui_scale_max = 2.0f;
 
         /* this is mostly for ZII */
-        if (gui.options.ui_scale_tmp < ui_scale_min)
-          gui.options.ui_scale_tmp = jeux.ui_scale;
+        if (jeux.ui.options.ui_scale_tmp < ui_scale_min)
+          jeux.ui.options.ui_scale_tmp = jeux.ui_scale;
 
         /* don't actually apply it until you let go because scaling something as you
          * move it around is WEIRD */
         bool released = ui_slider(
           CLAY_ID("UI SCALE SLIDER"),
-          &gui.options.ui_scale_tmp,
+          &jeux.ui.options.ui_scale_tmp,
           ui_scale_min,
           ui_scale_max
         );
 
         if (released) {
-          f3 p = { gui.options.window.x, gui.options.window.y };
+          f3 p = { jeux.ui.options.window.x, jeux.ui.options.window.y };
           p = f4x4_transform_f3(jeux.ui_transform, p);
 
-          jeux.ui_scale = gui.options.ui_scale_tmp;
+          jeux.ui_scale = jeux.ui.options.ui_scale_tmp;
           gl_resize();
 
           p = f4x4_transform_f3(f4x4_invert(jeux.ui_transform), p);
-          gui.options.window.x = fmaxf(p.x, 0);
-          gui.options.window.y = fmaxf(p.y, 0);
+          jeux.ui.options.window.x = fmaxf(p.x, 0);
+          jeux.ui.options.window.y = fmaxf(p.y, 0);
 
           f3 ui = jeux_screen_to_ui((f3) { jeux.win_size_x, jeux.win_size_y, 0 });
           Clay_SetLayoutDimensions((Clay_Dimensions) { ui.x, ui.y });
@@ -2979,10 +2978,10 @@ static void ui_window_content_options(void) {
 
 static void ui_main(void) {
   /* mouse_up resets lmb_down_el at the end of the frame so that elements
-   * have a frame to clean up (e.g. gui.lmb_click && gui.lmb_down_el == me) */
+   * have a frame to clean up (e.g. jeux.ui.lmb_click && jeux.ui.lmb_down_el == me) */
   bool mouse_up = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_RELEASED_THIS_FRAME;
-  gui.lmb_click = mouse_up;
-  gui.lmb_down = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_PRESSED_THIS_FRAME;
+  jeux.ui.lmb_click = mouse_up;
+  jeux.ui.lmb_down = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_PRESSED_THIS_FRAME;
 
   /* HUD */
   {
@@ -3005,8 +3004,8 @@ static void ui_main(void) {
         if (Clay_Hovered()) {
           jeux.sdl.cursor_next = jeux.sdl.cursor_doable;
         }
-        if (Clay_Hovered() && gui.lmb_click) {
-          gui.options.window.open ^= 1;
+        if (Clay_Hovered() && jeux.ui.lmb_click) {
+          jeux.ui.options.window.open ^= 1;
         }
 
         /* icon here */
@@ -3023,10 +3022,9 @@ static void ui_main(void) {
   ui_wabisabi_window(
     gl_Model_UiOptions,
     CLAY_STRING("OPTIONS"),
-    &gui.options.window,
+    &jeux.ui.options.window,
     &ui_window_content_options
   );
 
-  if (mouse_up) gui.lmb_down_el = (Clay_ElementId) { 0 };
+  if (mouse_up) jeux.ui.lmb_down_el = (Clay_ElementId) { 0 };
 }
-#undef gui
