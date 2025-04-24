@@ -21,6 +21,7 @@ typedef union { float arr[4][4]; f4 rows[4]; float floats[16]; } f4x4;
 
 /* enables extra things in the options, escape to quit, etc. */
 #define GAME_DEBUG true
+#define UNUSED_FN __attribute__((unused))
 
 #define BREAKPOINT() __builtin_debugtrap()
 #define jx_COUNT(arr) (sizeof(arr) / sizeof((arr)[0]))
@@ -32,6 +33,13 @@ typedef struct { f2 min, max; } Box2;
 static float lerp(float v0, float v1, float t) { return (1.0f - t) * v0 + t * v1; }
 static float clamp(float min, float max, float t) { return fminf(max, fmaxf(min, t)); }
 static float inv_lerp(float min, float max, float p) { return (p - min) / (max - min); }
+static float rads_distance(float a, float b) {
+  float difference = fmodf(b - a, M_PI*2.0);
+  return fmodf(2.0 * difference, M_PI*2.0) - difference;
+}
+static float rads_lerp(float a, float b, float t) {
+    return a + rads_distance(a, b) * t;
+}
 
 static float f2_length(f2 f) { return sqrtf(f.x*f.x + f.y*f.y); }
 static f2 f2_norm(f2 f) {
@@ -413,6 +421,9 @@ static struct {
   struct {
     struct {
       f2 pos, vel;
+
+      float heading_from_rads, heading_to_rads;
+      double heading_from_ts, heading_to_ts;
     } player;
   } sim;
 
@@ -1521,7 +1532,7 @@ static void gl_geo_reset(void) {
   jeux.gl.geo.model_draws_wtr = jeux.gl.geo.model_draws;
 }
 
-static void gl_geo_arc(
+static UNUSED_FN void gl_geo_arc(
   float radians_from,
   float radians_to,
   size_t detail,
@@ -1544,7 +1555,7 @@ static void gl_geo_arc(
   }
 }
 
-static void gl_geo_circle(size_t detail, f3 center, float radius, Color color) {
+static UNUSED_FN void gl_geo_circle(size_t detail, f3 center, float radius, Color color) {
   gl_geo_arc(
     0.0f,
     M_PI * 2.0f,
@@ -1555,7 +1566,7 @@ static void gl_geo_circle(size_t detail, f3 center, float radius, Color color) {
   );
 }
 
-static void gl_geo_line(f3 a, f3 b, float thickness, Color color) {
+static UNUSED_FN void gl_geo_line(f3 a, f3 b, float thickness, Color color) {
   float dx = a.x - b.x;
   float dy = a.y - b.y;
   float dlen = dx*dx + dy*dy;
@@ -1575,7 +1586,7 @@ static void gl_geo_line(f3 a, f3 b, float thickness, Color color) {
   *jeux.gl.geo.dyn->idx_wtr++ = (gl_Tri) { start + 2, start + 1, start + 3 };
 }
 
-static void gl_geo_box(f3 min, f3 max, Color color) {
+static UNUSED_FN void gl_geo_box(f3 min, f3 max, Color color) {
   uint16_t start = jeux.gl.geo.dyn->vtx_wtr - jeux.gl.geo.dyn->vtx;
 
   *jeux.gl.geo.dyn->vtx_wtr++ = (gl_geo_Vtx) { { min.x, min.y, min.z }, color };
@@ -1587,7 +1598,7 @@ static void gl_geo_box(f3 min, f3 max, Color color) {
   *jeux.gl.geo.dyn->idx_wtr++ = (gl_Tri) { start + 3, start + 2, start + 0 };
 }
 
-static void gl_geo_box2_outline(f3 min, f3 max, float thickness, Color color) {
+static UNUSED_FN void gl_geo_box2_outline(f3 min, f3 max, float thickness, Color color) {
   float t = thickness;
   float h = thickness * 0.5;
   Color c = color;
@@ -1597,7 +1608,7 @@ static void gl_geo_box2_outline(f3 min, f3 max, float thickness, Color color) {
   gl_geo_line((f3) { max.x    , min.y, min.z }, (f3) { max.x    , max.y, min.z }, t, c);
 }
 
-static void gl_geo_ring2_arc(
+static UNUSED_FN void gl_geo_ring2_arc(
   float radians_from,
   float radians_to,
   size_t detail,
@@ -1624,7 +1635,7 @@ static void gl_geo_ring2_arc(
   }
 }
 
-static void gl_geo_ring2(
+static UNUSED_FN void gl_geo_ring2(
   size_t detail,
   f3 center,
   float radius,
@@ -1642,7 +1653,7 @@ static void gl_geo_ring2(
   );
 }
 
-static void gl_geo_ring3(
+static UNUSED_FN void gl_geo_ring3(
   size_t detail,
   f3 center,
   float radius,
@@ -1667,7 +1678,7 @@ static void gl_geo_ring3(
   }
 }
 
-static void gl_geo_box3_outline(f3 center, f3 scale, float thickness, Color color) {
+static UNUSED_FN void gl_geo_box3_outline(f3 center, f3 scale, float thickness, Color color) {
 
   for (float dir_x = 0; dir_x < 2; dir_x++) {
     for (float dir_y = -1; dir_y <= 1; dir_y += 2) {
@@ -2049,25 +2060,72 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         if (jeux.key_actions[KeyAction_Down ]) input_dir.y -= 1;
         if (jeux.key_actions[KeyAction_Left ]) input_dir.x += 1;
         if (jeux.key_actions[KeyAction_Right]) input_dir.x -= 1;
+        bool any_input = (SDL_abs(input_dir.x) > 0 || SDL_abs(input_dir.y) > 0);
         input_dir = f2_norm(input_dir);
 
         f2 cam_forward = { -cosf(jeux.gl.camera.angle), -sinf(jeux.gl.camera.angle) };
         f2 cam_side    = { -cam_forward.y, cam_forward.x };
 
-        f3 dir_indicator_start = { 0, 0, 0 };
-        f3 dir_indicator_end = { 0, 0, 0 };
-        dir_indicator_end.x += cam_side.x * input_dir.x * 0.6f;
-        dir_indicator_end.y += cam_side.y * input_dir.x * 0.6f;
+        if (any_input && jeux.sim.player.heading_to_ts < jeux.elapsed) {
+          float angle = atan2f(input_dir.y, input_dir.x);
+          float duration = fabsf(rads_distance(angle, jeux.sim.player.heading_to_rads)) * 0.3f;
 
-        dir_indicator_end.x += cam_forward.x * input_dir.y * 0.6f;
-        dir_indicator_end.y += cam_forward.y * input_dir.y * 0.6f;
+          if (duration > 0) {
+            jeux.sim.player.heading_from_rads = jeux.sim.player.heading_to_rads;
+            jeux.sim.player.heading_from_ts = jeux.elapsed;
 
-        gl_geo_line(
-          jeux_world_to_screen(dir_indicator_start),
-          jeux_world_to_screen(dir_indicator_end),
-          debug_thickness,
-          (Color) { 0, 0, 255, 255 }
-        );
+            jeux.sim.player.heading_to_rads = angle;
+            jeux.sim.player.heading_to_ts = jeux.elapsed + duration;
+          }
+        }
+
+        /* draw input dir */
+        if (0) if (any_input) {
+          f3 dir_indicator_start = { 0, 0, 0 };
+          f3 dir_indicator_end = { 0, 0, 0 };
+          dir_indicator_end.x += cam_side.x * input_dir.x * 0.6f;
+          dir_indicator_end.y += cam_side.y * input_dir.x * 0.6f;
+
+          dir_indicator_end.x += cam_forward.x * input_dir.y * 0.6f;
+          dir_indicator_end.y += cam_forward.y * input_dir.y * 0.6f;
+
+          gl_geo_line(
+            jeux_world_to_screen(dir_indicator_start),
+            jeux_world_to_screen(dir_indicator_end),
+            debug_thickness,
+            (Color) { 0, 0, 255, 255 }
+          );
+        }
+
+        /* draw heading */
+        if (0) {
+          float heading_rads = rads_lerp(
+            jeux.sim.player.heading_from_rads,
+            jeux.sim.player.heading_to_rads,
+            clamp(0, 1, inv_lerp(
+              jeux.sim.player.heading_from_ts,
+              jeux.sim.player.heading_to_ts,
+              jeux.elapsed
+            ))
+          );
+          if (SDL_isinf(heading_rads)) heading_rads = jeux.sim.player.heading_from_rads;
+          f3 heading_p = { cosf(heading_rads), sinf(heading_rads), 0 };
+
+          f3 dir_indicator_start = { 0, 0, 0 };
+          f3 dir_indicator_end = { 0, 0, 0 };
+          dir_indicator_end.x += cam_side.x * heading_p.x * 0.6f;
+          dir_indicator_end.y += cam_side.y * heading_p.x * 0.6f;
+
+          dir_indicator_end.x += cam_forward.x * heading_p.y * 0.6f;
+          dir_indicator_end.y += cam_forward.y * heading_p.y * 0.6f;
+
+          gl_geo_line(
+            jeux_world_to_screen(dir_indicator_start),
+            jeux_world_to_screen(dir_indicator_end),
+            debug_thickness,
+            (Color) { 255, 0, 0, 255 }
+          );
+        }
 
       }
 
@@ -2132,23 +2190,44 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     }
 
     /* draw figure */
-    {
-      // animdata_Frame *animdata_frames = animdata_turn90_right_frames;
-      // size_t animdata_frame_count = jx_COUNT(animdata_turn90_right_frames);
-      // float animdata_duration = animdata_turn90_right_duration;
-      animdata_Frame *animdata_frames = animdata_walk_frames;
-      size_t animdata_frame_count = jx_COUNT(animdata_walk_frames);
-      float animdata_duration = animdata_walk_duration;
+    if (1) {
 
-      f4x4 model = f4x4_scale(1.0f);
 
-      /* rotate towards mouse */
-      {
-          f3 mouse = jeux.mouse_ground;
-          model = f4x4_mul_f4x4(model, f4x4_turn(atan2f(mouse.y - 0, mouse.x - 0) + (M_PI * 0.5f)));
+      animdata_Frame *animdata_frames;
+      size_t animdata_frame_count;
+      float animdata_duration;
+
+      bool left = rads_distance(jeux.sim.player.heading_from_rads, jeux.sim.player.heading_to_rads) < 0;
+
+      if (left) {
+        animdata_frames = animdata_turn90_left_frames;
+        animdata_frame_count = jx_COUNT(animdata_turn90_left_frames);
+        animdata_duration = animdata_turn90_left_duration;
+      } else {
+        animdata_frames = animdata_turn90_right_frames;
+        animdata_frame_count = jx_COUNT(animdata_turn90_right_frames);
+        animdata_duration = animdata_turn90_right_duration;
       }
 
-      float t = 0;// fmodf(jeux.elapsed, animdata_duration);
+      // animdata_Frame *animdata_frames = animdata_walk_frames;
+      // size_t animdata_frame_count = jx_COUNT(animdata_walk_frames);
+      // float animdata_duration = animdata_walk_duration;
+
+      float t = clamp(0, 1, inv_lerp(
+        jeux.sim.player.heading_from_ts,
+        jeux.sim.player.heading_to_ts,
+        jeux.elapsed
+      ));
+
+      /* as you go from (1 - ((n - 1)/n)) going to 1 it starts to wrap back around to the first frame */
+      t *= animdata_duration * (((float)animdata_frame_count - 1.0f) / (float)animdata_frame_count);
+
+      f4x4 model = f4x4_scale(1.0f);
+      model = f4x4_mul_f4x4(model, f4x4_turn(-rads_lerp(
+          jeux.sim.player.heading_from_rads,
+          jeux.sim.player.heading_to_rads,
+          t
+      ) + M_PI*0.5f*t*(left ? -1 : 1) ));
 
       size_t rhs_frame = -1;
       for (size_t i = 0; i < animdata_frame_count; i++)
@@ -2198,7 +2277,6 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         f4x4 matrix = model;
         matrix = f4x4_mul_f4x4(matrix, f4x4_move(head));
         /* the animations seem to be exported with the negative X axis as "forward," so ... */
-        matrix = f4x4_mul_f4x4(matrix, f4x4_turn(M_PI * -0.5f));
         matrix = f4x4_mul_f4x4(matrix, f4x4_scale(radius));
 
         *jeux.gl.geo.model_draws_wtr++ = (gl_ModelDraw) { .model = gl_Model_Head, .matrix = matrix };
