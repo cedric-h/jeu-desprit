@@ -438,7 +438,7 @@ static bool in_rect(float x, float y, float left, float top, float right, float 
 }
 static void item_slot(float x, float y){
 	static bool hovered;
-	static bool active;
+	// static bool active;
 
 	float dx = x-jeux.mouse_screen_x;
 	float dy = y-jeux.mouse_screen_y;
@@ -566,7 +566,7 @@ static void ui_window_content_inventory(void) {
         CLAY({
           .backgroundColor = paper,
           .layout.sizing = { .width = CLAY_SIZING_FIXED(64), .height = CLAY_SIZING_FIXED(64) },
-          .cornerRadius = 32,
+          .cornerRadius = { 32 },
         }){
 
         }
@@ -750,7 +750,7 @@ void gl_geo_box_rounded(f3 min, f3 max, Color color, float r) {
 // CHECK (I left the TODO here to entertain Cedric. Hi Cedric!)
 static void ui_statbar(Color inner_color, float x, float y, float numerator, float denominator, float width, float height) {
   float z = .9;
-  float q = M_PI * 0.5f;
+  // float q = M_PI * 0.5f;
 
   float padding_x = 4;
   float padding_y = 4;
@@ -985,9 +985,9 @@ static void ui_main(void) {
     &ui_window_content_inventory
   );
 
-  static float t = 0;
+  // static float t = 0;
   //item_grid(200, 20, 200+sinf(t)*50, 300);
-  t += .01f;
+  // t += .01f;
 
   if (mouse_up) gui.lmb_down_el = (Clay_ElementId) { 0 };
 }

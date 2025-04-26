@@ -5,11 +5,11 @@ setlocal
 set FLAGS=
 if defined RELEASE (
     echo Building for release...
-    set FLAGS=03
+    set FLAGS=-O3 -std=c99 -Wall -pedantic -Werror -Wno-overlength-strings -Wno-error=unused-function
     REM for /f "delims=" %%i in (bs\cc_flags_release.txt) do set FLAGS=%FLAGS% %%i
 ) else (
     echo Building for development...
-    set FLAGS=-g
+    set FLAGS=-g -std=c99 -Wall -pedantic -Werror -Wno-overlength-strings -Wno-error=unused-function
     REM for /f "delims=" %%i in (bs\cc_flags_dev.txt) do set FLAGS=%FLAGS% %%i
 )
 
