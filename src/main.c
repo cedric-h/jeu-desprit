@@ -369,6 +369,8 @@ typedef struct {
   float lmb_down_x, lmb_down_y;
 } ui_WabisabiWindow;
 
+typedef enum { ItemType_HealthPot } ItemType;
+
 static struct {
   struct {
     SDL_Window    *window;
@@ -422,9 +424,25 @@ static struct {
     struct {
       f2 pos, vel;
 
+      uint32_t hp, xp;
+
+      ItemType hotbar[6];
+      ItemType inventory[420];
+
+      /* between 0 and 5 */
+      size_t active_item;
+
       float heading_from_rads, heading_to_rads;
       double heading_from_ts, heading_to_ts;
     } player;
+
+    struct {
+      f2 pos, vel;
+      float height;
+
+      double explode_ts;
+    } grenade;
+
   } sim;
 
   /* renderer ("gl") */
