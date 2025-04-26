@@ -431,6 +431,8 @@ static struct {
 
       /* between 0 and 5 */
       size_t active_item;
+      /* drives animations that are a function of the active item */
+      double active_item_changed_ts;
 
       float heading_from_rads, heading_to_rads;
       double heading_from_ts, heading_to_ts;
