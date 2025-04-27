@@ -1,6 +1,6 @@
 // vim: sw=2 ts=2 expandtab smartindent
 
-typedef enum animdata_JointKey {
+typedef enum {
   animdata_JointKey_Hips,
   animdata_JointKey_RightArm,
   animdata_JointKey_RightForeArm,
@@ -17,9 +17,9 @@ typedef enum animdata_JointKey {
   animdata_JointKey_LeftToeBase,
   animdata_JointKey_LeftToe_End,
   animdata_JointKey_COUNT
-} animdata_JointKey_t;
+} animdata_JointKey;
 
-struct { animdata_JointKey_t from, to; } animdata_limb_connections[] = {
+struct { animdata_JointKey from, to; } animdata_limb_connections[] = {
   { .from = animdata_JointKey_RightLeg,     .to = animdata_JointKey_RightToeBase },
   { .from = animdata_JointKey_LeftLeg,      .to = animdata_JointKey_LeftToeBase  },
   { .from = animdata_JointKey_Neck,         .to = animdata_JointKey_RightArm     },
@@ -58,6 +58,31 @@ f3 animdata_base_pose[animdata_JointKey_COUNT] = {
   [animdata_JointKey_LeftToeBase ] = { 0.21825566184358358, -0.1323508653775437, 0.000009560816774012438 },
   [animdata_JointKey_LeftToe_End ] = { 0.23055954096239675, -0.22386654206013057, 0.0090544371624689 },
 };
+
+static f3 animdata_sample(
+  animdata_Frame    *animdata_frames,
+  size_t             animdata_frame_count,
+  float              animdata_duration,
+  animdata_JointKey  joint,
+  float              anim_t
+) {
+  size_t rhs_frame = -1;
+  for (size_t i = 0; i < animdata_frame_count; i++)
+    if (animdata_frames[i].time > anim_t) { rhs_frame = i; break; }
+  bool last_frame = rhs_frame == -1;
+
+  size_t lhs_frame = (last_frame ? animdata_frame_count : rhs_frame) - 1;
+  rhs_frame = (lhs_frame + 1) % animdata_frame_count;
+  float next_frame_t = last_frame ? animdata_duration : animdata_frames[rhs_frame].time;
+  float this_frame_t = animdata_frames[lhs_frame].time;
+  float tween_t = (anim_t - this_frame_t) / (next_frame_t - this_frame_t);
+
+  return f3_lerp(
+    animdata_frames[lhs_frame].joint_pos[joint],
+    animdata_frames[rhs_frame].joint_pos[joint],
+    tween_t
+  );
+}
 
 #include "../animations/include/walk.h"
 #include "../animations/include/turn90_right.h"

@@ -552,9 +552,12 @@ static struct {
   .win_size_y = 450,
   .ui_scale = 0.5f,
 
+  .helm_equipped = true,
+
   .gl.pp.current_aa = gl_AntiAliasingApproach_4XSSAA,
-  .gl.camera.fov = 70.0f,
+  .gl.camera.fov = 100.0f,
   .gl.camera.dist = 5.0f,
+  .gl.camera.perspective = true,
   .gl.camera.angle = 0.0f,
   .gl.camera.height = 1.0f,
 
@@ -2024,7 +2027,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
         Clay_BeginLayout();
 
-        ui_main();
+        // ui_main();
 
         cmds = Clay_EndLayout();
       }
@@ -2204,71 +2207,76 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     /* draw figure */
     if (1) {
-
-
-      animdata_Frame *animdata_frames;
-      size_t animdata_frame_count;
-      float animdata_duration;
+      animdata_Frame *turn_frames;
+      size_t turn_frame_count;
+      float turn_anim_duration;
 
       bool left = rads_distance(jeux.sim.player.heading_from_rads, jeux.sim.player.heading_to_rads) < 0;
 
       if (left) {
-        animdata_frames = animdata_turn90_left_frames;
-        animdata_frame_count = jx_COUNT(animdata_turn90_left_frames);
-        animdata_duration = animdata_turn90_left_duration;
+        turn_frames = animdata_turn90_left_frames;
+        turn_frame_count = jx_COUNT(animdata_turn90_left_frames);
+        turn_anim_duration = animdata_turn90_left_duration;
       } else {
-        animdata_frames = animdata_turn90_right_frames;
-        animdata_frame_count = jx_COUNT(animdata_turn90_right_frames);
-        animdata_duration = animdata_turn90_right_duration;
+        turn_frames = animdata_turn90_right_frames;
+        turn_frame_count = jx_COUNT(animdata_turn90_right_frames);
+        turn_anim_duration = animdata_turn90_right_duration;
       }
 
-      // animdata_Frame *animdata_frames = animdata_walk_frames;
-      // size_t animdata_frame_count = jx_COUNT(animdata_walk_frames);
-      // float animdata_duration = animdata_walk_duration;
-
-      float t = clamp(0, 1, inv_lerp(
-        jeux.sim.player.heading_from_ts,
-        jeux.sim.player.heading_to_ts,
-        jeux.elapsed
-      ));
-
-      /* as you go from (1 - ((n - 1)/n)) going to 1 it starts to wrap back around to the first frame */
-      t *= animdata_duration * (((float)animdata_frame_count - 1.0f) / (float)animdata_frame_count);
+      animdata_Frame *walk_frames = animdata_walk_frames;
+      size_t walk_frame_count = jx_COUNT(animdata_walk_frames);
+      float walk_anim_duration = animdata_walk_duration;
 
       f4x4 model = f4x4_scale(1.0f);
-      model = f4x4_mul_f4x4(model, f4x4_turn(-rads_lerp(
-          jeux.sim.player.heading_from_rads,
-          jeux.sim.player.heading_to_rads,
-          t
-      ) + M_PI*0.5f*t*(left ? -1 : 1) ));
 
-      size_t rhs_frame = -1;
-      for (size_t i = 0; i < animdata_frame_count; i++)
-        if (animdata_frames[i].time > t) { rhs_frame = i; break; }
-      bool last_frame = rhs_frame == -1;
+      /* here we figure out progress for the turn animation,
+       * and fade out either end of it via return_anim_t */
+      float turn_anim_t, return_anim_t;
+      {
+        float turn_t = clamp(0, 1, inv_lerp(
+          jeux.sim.player.heading_from_ts,
+          jeux.sim.player.heading_to_ts,
+          jeux.elapsed
+        ));
 
-      size_t lhs_frame = (last_frame ? animdata_frame_count : rhs_frame) - 1;
-      rhs_frame = (lhs_frame + 1) % animdata_frame_count;
-      float next_frame_t = last_frame ? animdata_duration : animdata_frames[rhs_frame].time;
-      float this_frame_t = animdata_frames[lhs_frame].time;
-      float tween_t = (t - this_frame_t) / (next_frame_t - this_frame_t);
+        /* as you go from (1 - ((n - 1)/n)) going to 1 it starts to wrap back around to the first frame */
+        float loopless_duration = turn_anim_duration * (((float)turn_frame_count - 1.0f) / (float)turn_frame_count);
+        turn_anim_t = turn_t * loopless_duration;
+        float turn_anim_begin_t  = clamp(0, 1, inv_lerp(loopless_duration*0.3,                 0, turn_anim_t));
+        float turn_anim_finish_t = clamp(0, 1, inv_lerp(loopless_duration*0.7, loopless_duration, turn_anim_t));
+        return_anim_t = fmaxf(turn_anim_begin_t, turn_anim_finish_t);
+        float return_t = clamp(0, 1, return_anim_t / loopless_duration);
 
-#define joint_pos(joint) f3_lerp(\
-  animdata_frames[lhs_frame].joint_pos[joint], \
-  animdata_frames[rhs_frame].joint_pos[joint], \
-  tween_t \
-)
+        model = f4x4_mul_f4x4(model, f4x4_turn(-rads_lerp(
+            jeux.sim.player.heading_from_rads,
+            jeux.sim.player.heading_to_rads,
+            turn_t
+        ) + M_PI*0.5f*turn_t*(left ? -1 : 1)*(1.0f - return_t) ));
+      }
 
+      /* figure out the positions of all the joints for this frame */
+      f3 joint_pos[animdata_JointKey_COUNT] = {0};
+      {
+        for (int joint_i = 0; joint_i < animdata_JointKey_COUNT; joint_i++) {
+          float walk_anim_t = fmod(jeux.elapsed, (double)walk_anim_duration);
+          f3 walk = animdata_sample(walk_frames, walk_frame_count, walk_anim_duration, joint_i, walk_anim_t);
+          f3 turn = animdata_sample(turn_frames, turn_frame_count, turn_anim_duration, joint_i, turn_anim_t);
+          joint_pos[joint_i] = f3_lerp(
+            turn,
+            walk,
+            return_anim_t
+          );
+        }
+      }
+
+      /* draw lines between connected joints */
       for (int i = 0; i < jx_COUNT(animdata_limb_connections); i++) {
-        animdata_JointKey_t from = animdata_limb_connections[i].from,
-                              to = animdata_limb_connections[i].to;
-        f3 a = jeux_world_to_screen(f4x4_transform_f3(model, joint_pos(from)));
-        f3 b = jeux_world_to_screen(f4x4_transform_f3(model, joint_pos(  to)));
+        animdata_JointKey from = animdata_limb_connections[i].from,
+                            to = animdata_limb_connections[i].to;
+        f3 a = jeux_world_to_screen(f4x4_transform_f3(model, joint_pos[from]));
+        f3 b = jeux_world_to_screen(f4x4_transform_f3(model, joint_pos[  to]));
 
-        float f = (jeux.gl.camera.perspective) ?
-          1.0f / tanf(jeux.gl.camera.fov * M_PI / 180.0f / 2) :
-          1.3f;
-        float thickness = jeux.win_size_x * 0.004f * f;
+        float thickness = jeux.win_size_x * 0.006f;
 
         Color color = { 1, 1, 1, 255 };
         gl_geo_line(a, b, thickness, color);
@@ -2279,7 +2287,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
       /* draw head */
       {
-        f3 head = joint_pos(animdata_JointKey_Head);
+        f3 head = joint_pos[animdata_JointKey_Head];
 
         /* head assets are 2x2x2 centered around (0, 0, 0) */
         float radius = 0.175f;
@@ -2290,6 +2298,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         f4x4 matrix = model;
         matrix = f4x4_mul_f4x4(matrix, f4x4_move(head));
         /* the animations seem to be exported with the negative X axis as "forward," so ... */
+        matrix = f4x4_mul_f4x4(matrix, f4x4_turn(-M_PI * 0.5f));
         matrix = f4x4_mul_f4x4(matrix, f4x4_scale(radius));
 
         *jeux.gl.geo.model_draws_wtr++ = (gl_ModelDraw) { .model = gl_Model_Head, .matrix = matrix };
@@ -2297,7 +2306,6 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
           *jeux.gl.geo.model_draws_wtr++ = (gl_ModelDraw) { .model = gl_Model_HornedHelmet, .matrix = matrix };
       }
 
-#undef joint_pos
     }
 
     if (0) gl_text_draw(
