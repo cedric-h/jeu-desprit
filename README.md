@@ -1,3 +1,5 @@
+![image](https://github.com/user-attachments/assets/882ba205-94c0-41b3-8ad5-6614bab778a2)
+
 # to run
 
 "bs" stands for "build scripts" 😘
