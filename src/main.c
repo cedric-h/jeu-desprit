@@ -80,6 +80,8 @@ static f3 f3_norm(f3 f) {
   return (f3) { f.x / len, f.y / len, f.z / len };
 }
 
+#include "vector.h"
+
 static f3 ray_hit_plane(f3 ray_origin, f3 ray_vector, f3 plane_origin, f3 plane_vector) {
   float delta_x = plane_origin.x - ray_origin.x;
   float delta_y = plane_origin.y - ray_origin.y;
@@ -375,6 +377,8 @@ typedef enum {
   ItemType_HornedHelmet,
   ItemType_COUNT,
 } ItemType;
+
+void particle_test();
 
 static struct {
   struct {
@@ -2314,6 +2318,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       jeux.win_size_y * 0.5,
       24.0f
     );
+
+    particle_test();
   }
 
   /* render */
@@ -2531,3 +2537,4 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 }
 
 #include "gui.h"
+#include "particle.h"
