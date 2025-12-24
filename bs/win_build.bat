@@ -25,7 +25,7 @@ REM -lmsvcrt -Wl,/NODEFAULTLIB:libcmt ^
 clang -o jeux.exe %FLAGS% ^
   ..\src\main.c ^
   angle\lib\libGLESv2.dll.lib ^
-  SDL\build\SDL3.lib ^
+  SDL\build\Debug\SDL3.lib ^
   -ISDL/include ^
   -Wl,-subsystem:windows
 

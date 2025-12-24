@@ -11,7 +11,7 @@ cd ..
 
 copy angle\bin\libGLESv2.dll .\
 copy angle\bin\libEGL.dll .\
-copy SDL\build\SDL3.dll .\
+copy SDL\build\Debug\SDL3.dll .\
 
 cd ..
 
