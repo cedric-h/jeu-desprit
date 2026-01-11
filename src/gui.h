@@ -1,16 +1,23 @@
+// vim: sw=2 ts=2 expandtab smartindent
+#ifndef gui_IMPLEMENTATION
+typedef struct {
+  bool open;
+  float x, y;
+  /* where you were when THE MOUSE WENT DOWN!!!! */
+  float lmb_down_x, lmb_down_y;
+} ui_WabisabiWindow;
+#endif
+
+#ifdef gui_IMPLEMENTATION
 /* UI */
 Clay_Color paper       = { 150, 131, 107, 255 };
 Clay_Color paper_hover = { 128, 101,  77, 255 };
 Clay_Color wood        = {  27,  15,   7, 255 };
 Clay_Color ink         = {   0,   0,   0, 255 };
-Clay_Color blood       = {   255,   0,   0, 255 };
-Clay_Color water       = {   0,   0,   255, 255 };
+Clay_Color blood       = { 255,   0,   0, 255 };
+Clay_Color water       = {   0,   0, 255, 255 };
 
-/* Macro to cast Clay's color type to our internal color type */
-#define CLAY_TO_COL(c) ((Color){ .r = c.r, .g = c.g, .b = c.b, .a = c.a })
-
-uint16_t text_body = 24;
-uint16_t text_title = 24;
+const uint16_t TEXT_SIZE_BODY = 24;
 
 /* massive hack. praying for forgiveness */
 #define gui (jeux.gui)
@@ -88,7 +95,7 @@ static void ui_icon_f4x4(gl_Model model, size_t size, f4x4 mat) {
 static void ui_checkbox(bool *state) {
 
   CLAY({
-    .layout.sizing = { CLAY_SIZING_FIXED(text_body), CLAY_SIZING_FIXED(text_body) },
+    .layout.sizing = { CLAY_SIZING_FIXED(TEXT_SIZE_BODY), CLAY_SIZING_FIXED(TEXT_SIZE_BODY) },
   }) {
 
     Clay_ElementDeclaration floating = {
@@ -217,7 +224,7 @@ static bool ui_arrow_button(bool left) {
 }
 
 static bool ui_picker(size_t *state, size_t option_count, Clay_String *labels) {
-  Clay_TextElementConfig text_conf = { .fontSize = text_body, .textColor = ink };
+  Clay_TextElementConfig text_conf = { .fontSize = TEXT_SIZE_BODY, .textColor = ink };
 
   bool changed = false;
 
@@ -450,7 +457,7 @@ static void ui_window_content_options(void) {
     };
 
     Clay_TextElementConfig label = {
-      .fontSize = text_body,
+      .fontSize = TEXT_SIZE_BODY,
       .textColor = ink
     };
 
@@ -650,6 +657,28 @@ static void ui_main(void) {
           ui_icon(gl_Model_UiOptions, 44);
         }
       }
+      CLAY({
+        .id = CLAY_ID("WallingToggle"),
+        .border = { .color = wood, .width = { 2, 2, 2, 2 }},
+        .backgroundColor = Clay_Hovered() ? paper_hover : paper,
+        .layout.sizing = { CLAY_SIZING_FIXED(64), CLAY_SIZING_FIXED(64) },
+        .cornerRadius = CLAY_CORNER_RADIUS(32),
+      }) {
+        if (Clay_Hovered()) {
+          jeux.sdl.cursor_next = jeux.sdl.cursor_doable;
+        }
+        if (Clay_Hovered() && gui.lmb_click) {
+          jeux.cad.placing_wall ^= 1;
+        }
+
+        /* icon here */
+        CLAY({
+          .layout.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+          .layout.childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER },
+        }) {
+          ui_icon(jeux.cad.placing_wall ? gl_Model_UiCheck : gl_Model_UiEcksButton, 44);
+        }
+      }
     }
 
     CLAY({
@@ -679,3 +708,4 @@ static void ui_main(void) {
 }
 
 #undef gui
+#endif

@@ -361,20 +361,8 @@ typedef enum {
   KeyAction_COUNT
 } KeyAction;
 
-typedef struct {
-  bool open;
-  float x, y;
-  /* where you were when THE MOUSE WENT DOWN!!!! */
-  float lmb_down_x, lmb_down_y;
-} ui_WabisabiWindow;
-
-typedef enum {
-  ItemType_None = -1,
-  ItemType_HealthPot,
-  ItemType_BattleAxe,
-  ItemType_HornedHelmet,
-  ItemType_COUNT,
-} ItemType;
+#include "gui.h"
+#include "cad.h"
 
 static struct {
   struct {
@@ -393,6 +381,7 @@ static struct {
       ui_WabisabiWindow window;
       float ui_scale_tmp;
     } options;
+
     /* the element who owns the current mouse down action */
     Clay_ElementId lmb_down_el;
     bool lmb_click; /* left mouse button up this frame (what you want most of the time) */
@@ -424,33 +413,21 @@ static struct {
   f4x4 camera, screen, ui_transform;
   float ui_scale;
 
-  /* sim, short for "simulation," stores things related to the gameplay, physics and combat. */
+  /* sim, short for "simulation," stores things related to the
+   * gameplay, physics and combat. */
   struct {
     struct {
-      f2 pos, vel;
-
-      uint32_t hp, xp;
-
-      ItemType hotbar[6];
-      ItemType inventory[420];
-
-      /* between 0 and 5 */
-      size_t active_item;
-      /* drives animations that are a function of the active item */
-      double active_item_changed_ts;
+      f2 pos;
 
       float heading_from_rads, heading_to_rads;
       double heading_from_ts, heading_to_ts;
     } player;
 
-    struct {
-      f2 pos, vel;
-      float height;
-
-      double explode_ts;
-    } grenade;
-
   } sim;
+
+  /* cad stores the state for the construction mode, where
+   * you build, tweak and upgrade walls, turrets and traps */
+  cad_State cad;
 
   /* renderer ("gl") */
   struct {
@@ -2007,97 +1984,11 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     {
       float debug_thickness = jeux.win_size_x * 0.00225f;
 
-      {
-        /* lil ring around the player,
-         * useful for debugging physics */
-        gl_geo_ring3(
-          32,
-          (f3) { 0.0f, 0.0f, -0.01f },
-          0.5f,
-          debug_thickness,
-          (Color) { 200, 100, 20, 255 }
-        );
-
-        f2 input_dir = {0};
-        if (jeux.key_actions[KeyAction_Up   ]) input_dir.y += 1;
-        if (jeux.key_actions[KeyAction_Down ]) input_dir.y -= 1;
-        if (jeux.key_actions[KeyAction_Left ]) input_dir.x += 1;
-        if (jeux.key_actions[KeyAction_Right]) input_dir.x -= 1;
-        bool any_input = (SDL_abs(input_dir.x) > 0 || SDL_abs(input_dir.y) > 0);
-        input_dir = f2_norm(input_dir);
-
-        f2 cam_forward = { -cosf(jeux.gl.camera.angle), -sinf(jeux.gl.camera.angle) };
-        f2 cam_side    = { -cam_forward.y, cam_forward.x };
-
-        if (any_input && jeux.sim.player.heading_to_ts < jeux.elapsed) {
-          float angle = atan2f(input_dir.y, input_dir.x);
-          float duration = fabsf(rads_distance(angle, jeux.sim.player.heading_to_rads)) * 0.3f;
-
-          if (duration > 0) {
-            jeux.sim.player.heading_from_rads = jeux.sim.player.heading_to_rads;
-            jeux.sim.player.heading_from_ts = jeux.elapsed;
-
-            jeux.sim.player.heading_to_rads = angle;
-            jeux.sim.player.heading_to_ts = jeux.elapsed + duration;
-          }
-        }
-
-        /* draw input dir */
-        if (0) if (any_input) {
-          f3 dir_indicator_start = { 0, 0, 0 };
-          f3 dir_indicator_end = { 0, 0, 0 };
-          dir_indicator_end.x += cam_side.x * input_dir.x * 0.6f;
-          dir_indicator_end.y += cam_side.y * input_dir.x * 0.6f;
-
-          dir_indicator_end.x += cam_forward.x * input_dir.y * 0.6f;
-          dir_indicator_end.y += cam_forward.y * input_dir.y * 0.6f;
-
-          gl_geo_line(
-            jeux_world_to_screen(dir_indicator_start),
-            jeux_world_to_screen(dir_indicator_end),
-            debug_thickness,
-            (Color) { 0, 0, 255, 255 }
-          );
-        }
-
-        /* draw heading */
-        if (0) {
-          float heading_rads = rads_lerp(
-            jeux.sim.player.heading_from_rads,
-            jeux.sim.player.heading_to_rads,
-            clamp(0, 1, inv_lerp(
-              jeux.sim.player.heading_from_ts,
-              jeux.sim.player.heading_to_ts,
-              jeux.elapsed
-            ))
-          );
-          if (SDL_isinf(heading_rads)) heading_rads = jeux.sim.player.heading_from_rads;
-          f3 heading_p = { cosf(heading_rads), sinf(heading_rads), 0 };
-
-          f3 dir_indicator_start = { 0, 0, 0 };
-          f3 dir_indicator_end = { 0, 0, 0 };
-          dir_indicator_end.x += cam_side.x * heading_p.x * 0.6f;
-          dir_indicator_end.y += cam_side.y * heading_p.x * 0.6f;
-
-          dir_indicator_end.x += cam_forward.x * heading_p.y * 0.6f;
-          dir_indicator_end.y += cam_forward.y * heading_p.y * 0.6f;
-
-          gl_geo_line(
-            jeux_world_to_screen(dir_indicator_start),
-            jeux_world_to_screen(dir_indicator_end),
-            debug_thickness,
-            (Color) { 255, 0, 0, 255 }
-          );
-        }
-
-      }
-
-
       /* debug where we think the mouse is */
-      if (0) {
+      if (1) {
 
         /* draw an X at the mouse's 2D position */
-        {
+        if (0) {
           gl_geo_line(
             (f3) { jeux.mouse_screen_x - 10.0f, jeux.mouse_screen_y + 10.0f, 0.99f },
             (f3) { jeux.mouse_screen_x + 10.0f, jeux.mouse_screen_y - 10.0f, 0.99f },
@@ -2151,6 +2042,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       );
 #endif
     }
+
+    /* draw player-constructed geometry */
+    cad_frame();
 
     /* draw figure */
     if (1) {
@@ -2476,4 +2370,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
   return SDL_APP_CONTINUE;
 }
 
+#define gui_IMPLEMENTATION
 #include "gui.h"
+
+#define cad_IMPLEMENTATION
+#include "cad.h"
