@@ -9,7 +9,7 @@ if defined RELEASE (
     REM for /f "delims=" %%i in (bs\cc_flags_release.txt) do set FLAGS=%FLAGS% %%i
 ) else (
     echo Building for development...
-    set FLAGS=-g -std=c99 -Wall -pedantic -Werror -Wno-overlength-strings -Wno-error=unused-function -Wno-error=static-in-inline
+    set FLAGS=-g -std=c99 -Wall -pedantic -Werror -Wno-overlength-strings -Wno-error=unused-function
     REM for /f "delims=" %%i in (bs\cc_flags_dev.txt) do set FLAGS=%FLAGS% %%i
 )
 

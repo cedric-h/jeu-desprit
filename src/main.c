@@ -387,17 +387,12 @@ static struct {
     SDL_Cursor *cursor_next;
   } sdl;
 
-  bool helm_equipped;
-
   /* gui */
   struct {
     struct {
       ui_WabisabiWindow window;
       float ui_scale_tmp;
     } options;
-    struct {
-      ui_WabisabiWindow window;
-    } inventory;
     /* the element who owns the current mouse down action */
     Clay_ElementId lmb_down_el;
     bool lmb_click; /* left mouse button up this frame (what you want most of the time) */
@@ -409,10 +404,11 @@ static struct {
   size_t win_size_x, win_size_y;
   KeyAction key_actions[KeyAction_COUNT];
   float mouse_screen_x, mouse_screen_y, mouse_lmb_down;
-  /* this is different than mouse_screen_x because dynamic ui scale; screen x/y is in raw screen coordinates */
+  /* this is different than mouse_screen_x because dynamic ui scale;
+   * screen x/y is in raw screen coordinates */
   float mouse_ui_x, mouse_ui_y, mouse_ui_lmb_down_x, mouse_ui_lmb_down_y;
   /* mouse projected onto the ground plane at z=0
-   * used for aiming weapons, picking up/dropping things from inventory etc. */
+   * used for knowing where to build things */
   f3 mouse_ground;
 
   /* timekeeping */
@@ -550,9 +546,7 @@ static struct {
 } jeux = {
   .win_size_x = 800,
   .win_size_y = 450,
-  .ui_scale = 0.5f,
-
-  .helm_equipped = true,
+  .ui_scale = 0.7f,
 
   .gl.pp.current_aa = gl_AntiAliasingApproach_4XSSAA,
   .gl.camera.fov = 100.0f,
@@ -568,9 +562,6 @@ static struct {
     // .options.window.open = true,
     .options.window.x = 142,
     .options.window.y = 68,
-    .inventory.window.open = false,
-    .inventory.window.x = 300,
-    .inventory.window.y = 200,    
   }
 };
 
@@ -2004,7 +1995,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
         Clay_BeginLayout();
 
-        // ui_main();
+        ui_main();
 
         cmds = Clay_EndLayout();
       }
@@ -2258,8 +2249,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         matrix = f4x4_mul_f4x4(matrix, f4x4_scale(radius));
 
         *jeux.gl.geo.model_draws_wtr++ = (gl_ModelDraw) { .model = gl_Model_Head, .matrix = matrix };
-        if(jeux.helm_equipped)
-          *jeux.gl.geo.model_draws_wtr++ = (gl_ModelDraw) { .model = gl_Model_HornedHelmet, .matrix = matrix };
+        *jeux.gl.geo.model_draws_wtr++ = (gl_ModelDraw) { .model = gl_Model_HornedHelmet, .matrix = matrix };
       }
 
     }
