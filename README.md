@@ -129,7 +129,7 @@ Make sure to save it in the repo's `svg/` directory in case we further automate 
 ## 5. Copy and paste the resulting code into a file in `svg/include/`
 <img width="500" alt="Screenshot 2025-04-24 at 7 01 53 AM" src="https://github.com/user-attachments/assets/8372b6fb-962f-47cc-ba0a-c18de430cb20" />
 
-## 6. Include the file in `src/geometry_assets.h`, and add a gl_Model enum variant for it.
+## 6. Include the file in `src/geometry_assets.h`, and add a gl_Model enum variant for it in `src/gl.h`.
 <img width="500" alt="Screenshot 2025-04-24 at 6 58 53 AM" src="https://github.com/user-attachments/assets/f2a42056-ef62-4c0c-80c3-ace87de85ee8" />
 
 ## 7. Associate the enum variant with the file contents

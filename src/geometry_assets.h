@@ -1,23 +1,6 @@
+// vim: sw=2 ts=2 expandtab smartindent
+
 /* This file is used as an index of all the 2D and 3D vector-based assets we import and use */
-
-typedef enum {
-  gl_Model_Head,
-  gl_Model_HornedHelmet,
-
-  gl_Model_UiOptions,
-  gl_Model_UiArrowButton,
-  gl_Model_UiCheck,
-  gl_Model_UiCheckBox,
-  gl_Model_UiEcksButton,
-  gl_Model_UiSliderBody,
-  gl_Model_UiSliderHandle,
-  gl_Model_UiWindowCorner,
-  gl_Model_UiWindowTop,
-  gl_Model_UiWindowBorder,
-  gl_Model_UiWindowBg,
-
-  gl_Model_COUNT,
-} gl_Model;
 
 #include "../models/include/Head.h"
 #include "../models/include/HornedHelmet.h"

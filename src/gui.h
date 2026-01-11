@@ -1,21 +1,36 @@
 // vim: sw=2 ts=2 expandtab smartindent
 #ifndef gui_IMPLEMENTATION
+
 typedef struct {
   bool open;
   float x, y;
   /* where you were when THE MOUSE WENT DOWN!!!! */
   float lmb_down_x, lmb_down_y;
 } ui_WabisabiWindow;
+
+typedef struct {
+  struct {
+    ui_WabisabiWindow window;
+    float gui_scale_tmp;
+  } options;
+
+  /* the element who owns the current mouse down action */
+  Clay_ElementId lmb_down_el;
+  bool lmb_click; /* left mouse button up this frame (what you want most of the time) */
+  bool lmb_down; /* left mouse button down this frame */
+} gui_State;
+
+static void gui_init(void);
+static void gui_main(void);
+
 #endif
 
 #ifdef gui_IMPLEMENTATION
 /* UI */
-Clay_Color paper       = { 150, 131, 107, 255 };
-Clay_Color paper_hover = { 128, 101,  77, 255 };
-Clay_Color wood        = {  27,  15,   7, 255 };
-Clay_Color ink         = {   0,   0,   0, 255 };
-Clay_Color blood       = { 255,   0,   0, 255 };
-Clay_Color water       = {   0,   0, 255, 255 };
+Clay_Color ui_paper       = { 150, 131, 107, 255 };
+Clay_Color ui_paper_hover = { 128, 101,  77, 255 };
+Clay_Color ui_wood        = {  27,  15,   7, 255 };
+Clay_Color ui_ink         = {   0,   0,   0, 255 };
 
 const uint16_t TEXT_SIZE_BODY = 24;
 
@@ -224,7 +239,7 @@ static bool ui_arrow_button(bool left) {
 }
 
 static bool ui_picker(size_t *state, size_t option_count, Clay_String *labels) {
-  Clay_TextElementConfig text_conf = { .fontSize = TEXT_SIZE_BODY, .textColor = ink };
+  Clay_TextElementConfig text_conf = { .fontSize = TEXT_SIZE_BODY, .textColor = ui_ink };
 
   bool changed = false;
 
@@ -373,7 +388,7 @@ static void ui_wabisabi_window(
         }
 
         CLAY({ .layout.padding.top = 8 }) {
-          CLAY_TEXT(window_title, CLAY_TEXT_CONFIG({ .fontSize = 30, .textColor = ink }));
+          CLAY_TEXT(window_title, CLAY_TEXT_CONFIG({ .fontSize = 30, .textColor = ui_ink }));
         };
 
         CLAY({
@@ -458,7 +473,7 @@ static void ui_window_content_options(void) {
 
     Clay_TextElementConfig label = {
       .fontSize = TEXT_SIZE_BODY,
-      .textColor = ink
+      .textColor = ui_ink
     };
 
     /* antialiasing approach dropdown */
@@ -482,27 +497,27 @@ static void ui_window_content_options(void) {
       CLAY(pair_inner) { CLAY_TEXT(CLAY_STRING("UI SCALE"), CLAY_TEXT_CONFIG(label)); }
       CLAY(pair_inner) {
 
-        float ui_scale_min = 0.2f;
-        float ui_scale_max = 2.0f;
+        float gui_scale_min = 0.2f;
+        float gui_scale_max = 2.0f;
 
         /* this is mostly for ZII */
-        if (gui.options.ui_scale_tmp < ui_scale_min)
-          gui.options.ui_scale_tmp = jeux.ui_scale;
+        if (gui.options.gui_scale_tmp < gui_scale_min)
+          gui.options.gui_scale_tmp = jeux.gui_scale;
 
         /* don't actually apply it until you let go because scaling something as you
          * move it around is WEIRD */
         bool released = ui_slider(
           CLAY_ID("UI SCALE SLIDER"),
-          &gui.options.ui_scale_tmp,
-          ui_scale_min,
-          ui_scale_max
+          &gui.options.gui_scale_tmp,
+          gui_scale_min,
+          gui_scale_max
         );
 
         if (released) {
           f3 p = { gui.options.window.x, gui.options.window.y };
           p = f4x4_transform_f3(jeux.ui_transform, p);
 
-          jeux.ui_scale = gui.options.ui_scale_tmp;
+          jeux.gui_scale = gui.options.gui_scale_tmp;
           gl_resize();
 
           p = f4x4_transform_f3(f4x4_invert(jeux.ui_transform), p);
@@ -519,7 +534,7 @@ static void ui_window_content_options(void) {
 
     /* "CAMERA" header */
     CLAY({ .layout.sizing.height = CLAY_SIZING_FIXED(30) });
-    CLAY_TEXT(CLAY_STRING("CAMERA"), CLAY_TEXT_CONFIG({ .fontSize = 30, .textColor = ink }));
+    CLAY_TEXT(CLAY_STRING("CAMERA"), CLAY_TEXT_CONFIG({ .fontSize = 30, .textColor = ui_ink }));
     CLAY({ .layout.sizing.height = CLAY_SIZING_FIXED(20) });
 
     /* perspective checkbox */
@@ -563,7 +578,7 @@ static void ui_window_content_options(void) {
 
     /* "LIGHTING" header */
     CLAY({ .layout.sizing.height = CLAY_SIZING_FIXED(30) });
-    CLAY_TEXT(CLAY_STRING("LIGHTING"), CLAY_TEXT_CONFIG({ .fontSize = 30, .textColor = ink }));
+    CLAY_TEXT(CLAY_STRING("LIGHTING"), CLAY_TEXT_CONFIG({ .fontSize = 30, .textColor = ui_ink }));
     CLAY({ .layout.sizing.height = CLAY_SIZING_FIXED(20) });
 
     /* light angle slider */
@@ -609,7 +624,7 @@ void gl_geo_box_rounded(f3 min, f3 max, Color color, float r) {
   gl_geo_line((f3) { rmax.x  , rmin.y+h, max.z }, (f3) { rmax.x  , rmax.y-h, max.z }, r, color);
 }
 
-static void ui_main(void) {
+static void gui_main(void) {
   /* mouse_up resets lmb_down_el at the end of the frame so that elements
    * have a frame to clean up (e.g. gui.lmb_click && gui.lmb_down_el == me) */
   bool mouse_up = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_RELEASED_THIS_FRAME;
@@ -637,8 +652,8 @@ static void ui_main(void) {
     }) {
       CLAY({
         .id = CLAY_ID("OptionsToggle"),
-        .border = { .color = wood, .width = { 2, 2, 2, 2 }},
-        .backgroundColor = Clay_Hovered() ? paper_hover : paper,
+        .border = { .color = ui_wood, .width = { 2, 2, 2, 2 }},
+        .backgroundColor = Clay_Hovered() ? ui_paper_hover : ui_paper,
         .layout.sizing = { CLAY_SIZING_FIXED(64), CLAY_SIZING_FIXED(64) },
         .cornerRadius = CLAY_CORNER_RADIUS(32),
       }) {
@@ -659,8 +674,8 @@ static void ui_main(void) {
       }
       CLAY({
         .id = CLAY_ID("WallingToggle"),
-        .border = { .color = wood, .width = { 2, 2, 2, 2 }},
-        .backgroundColor = Clay_Hovered() ? paper_hover : paper,
+        .border = { .color = ui_wood, .width = { 2, 2, 2, 2 }},
+        .backgroundColor = Clay_Hovered() ? ui_paper_hover : ui_paper,
         .layout.sizing = { CLAY_SIZING_FIXED(64), CLAY_SIZING_FIXED(64) },
         .cornerRadius = CLAY_CORNER_RADIUS(32),
       }) {
@@ -705,6 +720,48 @@ static void ui_main(void) {
   // t += .01f;
 
   if (mouse_up) gui.lmb_down_el = (Clay_ElementId) { 0 };
+}
+
+static void gui_handle_errors(Clay_ErrorData error_data) {
+  SDL_Log("%s\n", error_data.errorText.chars);
+}
+
+static Clay_Dimensions gui_measure_text(
+  Clay_StringSlice text,
+  Clay_TextElementConfig *config,
+  void *userData
+) {
+  float size = config->fontSize;
+  float scale = (size / font_BASE_CHAR_SIZE);
+
+  float size_x = 0;
+  float size_y = 0;
+  for (int i = 0; i < text.length; i++) {
+    char c = text.chars[i] | (1 << 5); /* this is a caps-only font, so atlas only has lowercase */
+    font_LetterRegion *l = &font_letter_regions[(size_t)(c)];
+
+    /* for the last character, don't add its advance - we aren't writing more after it */
+    size_x += ((i == (text.length-1)) ? l->size_x : l->advance) * scale;
+    size_y = fmaxf(size_y, l->size_y * scale);
+  }
+
+  return (Clay_Dimensions) { size_x, size_y };
+}
+
+/* gui init - need to init gl first so that the
+ * ui matrix thingy is initialized */
+static void gui_init(void) {
+  f3 ui = jeux_screen_to_ui((f3) { jeux.win_size_x, jeux.win_size_y, 0 });
+
+  Clay_Initialize(
+    (Clay_Arena) {
+      .memory = SDL_malloc(Clay_MinMemorySize()),
+      .capacity = Clay_MinMemorySize()
+    },
+    (Clay_Dimensions) { ui.x, ui.y },
+    (Clay_ErrorHandler) { gui_handle_errors }
+  );
+  Clay_SetMeasureTextFunction(gui_measure_text, NULL);
 }
 
 #undef gui
