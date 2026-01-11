@@ -1194,23 +1194,10 @@ static SDL_AppResult gl_init(void) {
       }
 #endif
 
-      /* normalalize the normals */
+      /* alpha not supplied by asset cooker but needed for rendering? */
       for (int vtx_i = 0; vtx_i < vtx_count; vtx_i++) {
         gl_geo_Vtx *v = vtx + vtx_i;
         v->color.a = 255;
-
-        if (i == gl_Model_IntroGravestoneTerrain && 0) {
-          float desaturation = 0.4; /* 0 .. 1 */
-
-          float r = (float)v->color.r / 255.0f;
-          float g = (float)v->color.g / 255.0f;
-          float b = (float)v->color.b / 255.0f;
-          float luma = (r * 0.2126) + (g * 0.7152) + (b * 0.0722);
-          r = lerp(r, luma, desaturation) * 255.0f;
-          g = lerp(g, luma, desaturation) * 255.0f;
-          b = lerp(b, luma, desaturation) * 255.0f;
-          v->color = (Color) { r, g, b, 255 };
-        }
       }
 
       glGenBuffers(1, &jeux.gl.geo.static_models[i].buf_vtx);
@@ -1929,10 +1916,6 @@ static void gl_draw_clay_commands(Clay_RenderCommandArray *rcommands) {
   jeux.gl.geo.dyn = &jeux.gl.geo.dyn_geo_world;
 }
 
-f3 sim_bounds_path[] =
-#include "../collision/IntroGravestoneTerrain.h"
-;
-
 static void ui_main(void);
 SDL_AppResult SDL_AppIterate(void *appstate) {
   /* timekeeping */
@@ -2006,12 +1989,6 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     gl_geo_reset();
     gl_text_reset();
 
-    /* draw terrain! */
-    *jeux.gl.geo.model_draws_wtr++ = (gl_ModelDraw) {
-      .model = gl_Model_IntroGravestoneTerrain,
-      .matrix = f4x4_scale(1)
-    };
-
     /* MARK: draw ui */
     {
       Clay_RenderCommandArray cmds;
@@ -2038,27 +2015,6 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     /* debug */
     {
       float debug_thickness = jeux.win_size_x * 0.00225f;
-
-      {
-        int sim_bounds_path_count = jx_COUNT(sim_bounds_path);
-        for (int i = 0; i < sim_bounds_path_count; i++) {
-          f3 lhs = sim_bounds_path[(i + 0) % sim_bounds_path_count];
-          f3 rhs = sim_bounds_path[(i + 1) % sim_bounds_path_count];
-
-          lhs = jeux_world_to_screen(lhs);
-          rhs = jeux_world_to_screen(rhs);
-
-          lhs.z += 0.1f;
-          rhs.z += 0.1f;
-
-          gl_geo_line(
-            lhs,
-            rhs,
-            debug_thickness,
-            (Color) { 255, 0, 0, 255 }
-          );
-        }
-      }
 
       {
         /* lil ring around the player,

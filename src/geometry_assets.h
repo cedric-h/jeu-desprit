@@ -3,7 +3,6 @@
 typedef enum {
   gl_Model_Head,
   gl_Model_HornedHelmet,
-  gl_Model_IntroGravestoneTerrain,
 
   gl_Model_UiOptions,
   gl_Model_UiArrowButton,
@@ -22,7 +21,6 @@ typedef enum {
 
 #include "../models/include/Head.h"
 #include "../models/include/HornedHelmet.h"
-#include "../models/include/IntroGravestoneTerrain.h"
 #include "../svg/include/UiOptions.svg.h"
 #include "../svg/include/UiArrowButton.svg.h"
 #include "../svg/include/UiCheck.svg.h"
@@ -48,10 +46,6 @@ struct {
   [gl_Model_HornedHelmet] = {
       .vtx = model_vtx_HornedHelmet, .vtx_count = jx_COUNT(model_vtx_HornedHelmet),
       .tri = model_tri_HornedHelmet, .tri_count = jx_COUNT(model_tri_HornedHelmet),
-  },
-  [gl_Model_IntroGravestoneTerrain] = {
-      .vtx = model_vtx_IntroGravestoneTerrain, .vtx_count = jx_COUNT(model_vtx_IntroGravestoneTerrain),
-      .tri = model_tri_IntroGravestoneTerrain, .tri_count = jx_COUNT(model_tri_IntroGravestoneTerrain),
   },
 
   /* TODO: In retrospect, the asset cookers really should output these sized fat pointer structs. You live and you learn. */
