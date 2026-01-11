@@ -56,7 +56,9 @@ static struct {
   /* input */
   size_t win_size_x, win_size_y;
   KeyAction key_actions[KeyAction_COUNT];
-  float mouse_screen_x, mouse_screen_y, mouse_lmb_down;
+  float mouse_screen_x, mouse_screen_y;
+  /* raw_mouse_lmb_down may get captured by the UI and not go to mouse_lmb_down */
+  bool raw_mouse_lmb_down, mouse_lmb_down;
   /* this is different than mouse_screen_x because dynamic ui scale;
    * screen x/y is in raw screen coordinates */
   float mouse_ui_x, mouse_ui_y, mouse_ui_lmb_down_x, mouse_ui_lmb_down_y;
@@ -234,10 +236,10 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
   /* mouse/keyboard input */
   {
     if (event->type == SDL_EVENT_MOUSE_BUTTON_UP) {
-      jeux.mouse_lmb_down = !(event->button.button == SDL_BUTTON_LEFT);
+      jeux.raw_mouse_lmb_down = !(event->button.button == SDL_BUTTON_LEFT);
     }
     if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-      jeux.mouse_lmb_down = event->button.button == SDL_BUTTON_LEFT;
+      jeux.raw_mouse_lmb_down = event->button.button == SDL_BUTTON_LEFT;
 
       f3 ui = jeux_screen_to_ui((f3) { event->button.x, event->button.y, 0 });
       jeux.mouse_ui_lmb_down_x = ui.x;
@@ -368,14 +370,20 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       for (int i = 0; i < 3; i++) {
         Clay_SetPointerState(
           (Clay_Vector2) { jeux.mouse_ui_x, jeux.mouse_ui_y },
-          jeux.mouse_lmb_down
+          jeux.raw_mouse_lmb_down
         );
 
         Clay_BeginLayout();
 
-        gui_main();
+        gui_frame();
 
         cmds = Clay_EndLayout();
+      }
+
+      jeux.mouse_lmb_down = false;
+      SDL_Log("mouse_capture = %d", (int)jeux.gui.capture_mouse);
+      if (!jeux.gui.capture_mouse) {
+        jeux.mouse_lmb_down = jeux.raw_mouse_lmb_down;
       }
 
       gl_draw_clay_commands(&cmds);

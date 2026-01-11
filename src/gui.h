@@ -18,10 +18,14 @@ typedef struct {
   Clay_ElementId lmb_down_el;
   bool lmb_click; /* left mouse button up this frame (what you want most of the time) */
   bool lmb_down; /* left mouse button down this frame */
+
+  /* set to false at the beginning of each frame,
+   * set it to true to stop e.g. cad from using the input */
+  bool capture_mouse;
 } gui_State;
 
 static void gui_init(void);
-static void gui_main(void);
+static void gui_frame(void);
 
 #endif
 
@@ -286,6 +290,10 @@ static void ui_wabisabi_window(
     .layout.sizing.height = CLAY_SIZING_FIT(100, 400),
     .border = debug_border,
   }) {
+
+    if (Clay_Hovered()) {
+      gui.capture_mouse = true;
+    }
 
     /* Wabisabi Window - Background */
     CLAY({
@@ -624,7 +632,9 @@ void gl_geo_box_rounded(f3 min, f3 max, Color color, float r) {
   gl_geo_line((f3) { rmax.x  , rmin.y+h, max.z }, (f3) { rmax.x  , rmax.y-h, max.z }, r, color);
 }
 
-static void gui_main(void) {
+static void gui_frame(void) {
+  gui.capture_mouse = false;
+
   /* mouse_up resets lmb_down_el at the end of the frame so that elements
    * have a frame to clean up (e.g. gui.lmb_click && gui.lmb_down_el == me) */
   bool mouse_up = Clay_GetCurrentContext()->pointerInfo.state == CLAY_POINTER_DATA_RELEASED_THIS_FRAME;
@@ -637,14 +647,14 @@ static void gui_main(void) {
     .id = CLAY_ID("Root"),
     .layout = {
       .layoutDirection = CLAY_TOP_TO_BOTTOM,
-      .sizing = { .width = CLAY_SIZING_GROW(0), .height = CLAY_SIZING_GROW(0) }
+      .sizing = { .width = CLAY_SIZING_FIT(0), .height = CLAY_SIZING_FIT(0) }
     }
   }) {
 
     CLAY({
       .id = CLAY_ID("HeaderBar"),
       .layout = {
-        .sizing = { .width = CLAY_SIZING_GROW(0), .height = CLAY_SIZING_FIT(64)},
+        .sizing = { .width = CLAY_SIZING_FIT(0), .height = CLAY_SIZING_FIT(64) },
         .padding = CLAY_PADDING_ALL(16),
         .childGap = 16,
         .childAlignment = { .x = CLAY_ALIGN_X_LEFT }
@@ -659,6 +669,7 @@ static void gui_main(void) {
       }) {
         if (Clay_Hovered()) {
           jeux.sdl.cursor_next = jeux.sdl.cursor_doable;
+          gui.capture_mouse = true;
         }
         if (Clay_Hovered() && gui.lmb_click) {
           gui.options.window.open ^= 1;
@@ -680,6 +691,7 @@ static void gui_main(void) {
         .cornerRadius = CLAY_CORNER_RADIUS(32),
       }) {
         if (Clay_Hovered()) {
+          gui.capture_mouse = true;
           jeux.sdl.cursor_next = jeux.sdl.cursor_doable;
         }
         if (Clay_Hovered() && gui.lmb_click) {
@@ -696,16 +708,6 @@ static void gui_main(void) {
       }
     }
 
-    CLAY({
-      .id = CLAY_ID("Main"),
-      .layout = {
-        .sizing = { .width = CLAY_SIZING_GROW(0), .height = CLAY_SIZING_GROW(0)},
-        .padding = CLAY_PADDING_ALL(16),
-        .childGap = 16,
-        .childAlignment = { .x = CLAY_ALIGN_X_LEFT, .y = CLAY_ALIGN_Y_BOTTOM }
-      },      
-    }) { }
-
   }
 
   ui_wabisabi_window(
@@ -714,10 +716,6 @@ static void gui_main(void) {
     &gui.options.window,
     &ui_window_content_options
   );
-
-  // static float t = 0;
-  //item_grid(200, 20, 200+sinf(t)*50, 300);
-  // t += .01f;
 
   if (mouse_up) gui.lmb_down_el = (Clay_ElementId) { 0 };
 }
